@@ -1,18 +1,15 @@
-﻿from aiogram import Router, F, types
+from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
-from aiogram.types import ReplyKeyboardRemove
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 from keyboards import inv_menu, items_pagination_kb
 from github_api import get_file_content, save_file_content
-from states import InventoryEdit, InventorySearch
+from states import InventorySearch
 import math
 
 router = Router()
 
 ITEMS_PER_PAGE = 10
 
-# -------------------------------------------------------------------
-# Загрузка данных
-# -------------------------------------------------------------------
 async def load_inventory():
     data = await get_file_content("inventory_data.json")
     return data if data else {"items": []}
@@ -20,9 +17,6 @@ async def load_inventory():
 async def save_inventory(items):
     await save_file_content("inventory_data.json", {"items": items})
 
-# -------------------------------------------------------------------
-# Формирование текста для пагинированного списка
-# -------------------------------------------------------------------
 def build_items_page(items: list, page: int = 0, per_page: int = ITEMS_PER_PAGE):
     total = len(items)
     total_pages = math.ceil(total / per_page) if total else 1
@@ -44,16 +38,10 @@ def build_items_page(items: list, page: int = 0, per_page: int = ITEMS_PER_PAGE)
     text += f"Страница {page+1} из {total_pages} (показано {start+1}–{min(end, total)} из {total})"
     return text, total_pages
 
-# -------------------------------------------------------------------
-# Меню
-# -------------------------------------------------------------------
 @router.message(F.text == "📊 Инвентаризация")
 async def show_inv_menu(message: types.Message):
     await message.answer("Управление инвентаризацией:", reply_markup=inv_menu)
 
-# -------------------------------------------------------------------
-# Все товары (с пагинацией)
-# -------------------------------------------------------------------
 @router.message(F.text == "📋 Все товары")
 async def show_all_items(message: types.Message, state: FSMContext):
     inv = await load_inventory()
@@ -73,23 +61,19 @@ async def paginate_items(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
-# -------------------------------------------------------------------
-# Только расхождения
-# -------------------------------------------------------------------
 @router.message(F.text == "⚠️ Только расхождения")
 async def show_mismatches(message: types.Message, state: FSMContext):
     inv = await load_inventory()
     items = inv.get("items", [])
     mismatches = [i for i in items if i["factQuantity"] != i["systemQuantity"]]
     await state.update_data(inv_items=mismatches, current_page=0)
-    text, total_pages = build_items_page(mismatches, 0)
-    kb = items_pagination_kb(0, total_pages) if total_pages > 1 else None
-    await message.answer(text if mismatches else "Расхождений нет! 🎉",
-                         parse_mode="HTML", reply_markup=kb)
+    if not mismatches:
+        await message.answer("Расхождений нет! 🎉", reply_markup=inv_menu)
+    else:
+        text, total_pages = build_items_page(mismatches, 0)
+        kb = items_pagination_kb(0, total_pages) if total_pages > 1 else None
+        await message.answer(text, parse_mode="HTML", reply_markup=kb or inv_menu)
 
-# -------------------------------------------------------------------
-# Поиск по названию (начинаем диалог)
-# -------------------------------------------------------------------
 @router.message(F.text == "🔍 Поиск по названию")
 async def search_start(message: types.Message, state: FSMContext):
     await state.set_state(InventorySearch.waiting_for_query)
@@ -110,40 +94,6 @@ async def search_execute(message: types.Message, state: FSMContext):
         kb = items_pagination_kb(0, total_pages) if total_pages > 1 else None
         await message.answer(text, parse_mode="HTML", reply_markup=kb or inv_menu)
 
-# -------------------------------------------------------------------
-# Ввод фактического остатка (через команду или кнопку "✏️")
-# -------------------------------------------------------------------
-@router.message(F.text.startswith("/setfact"))
-async def set_fact_command(message: types.Message, state: FSMContext):
-    # Формат: /setfact 123 42
-    parts = message.text.split()
-    if len(parts) != 3:
-        await message.answer("Используйте: /setfact <id товара> <фактический остаток>")
-        return
-    try:
-        item_id = int(parts[1])
-        new_fact = int(parts[2])
-    except:
-        await message.answer("ID и количество должны быть числами.")
-        return
-
-    inv = await load_inventory()
-    items = inv.get("items", [])
-    item = next((i for i in items if i["id"] == item_id), None)
-    if not item:
-        await message.answer("Товар с таким ID не найден.")
-        return
-    item["factQuantity"] = new_fact
-    await save_inventory(items)
-    await message.answer(f"✅ Обновлён: {item['name']} — факт = {new_fact}")
-
-# Более удобный вариант — начать редактирование из пагинированного списка.
-# Добавим inline-кнопку "✏️" рядом с каждым товаром. Для этого немного усложним клавиатуру.
-# (Оставим этот функционал на будущее, чтобы не перегружать ответ.)
-
-# -------------------------------------------------------------------
-# Сохранение в GitHub
-# -------------------------------------------------------------------
 @router.message(F.text == "💾 Сохранить в GitHub")
 async def save_to_github(message: types.Message):
     inv = await load_inventory()
@@ -153,9 +103,6 @@ async def save_to_github(message: types.Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
-# -------------------------------------------------------------------
-# Экспорт расхождений CSV
-# -------------------------------------------------------------------
 @router.message(F.text == "📎 CSV расхождений")
 async def export_mismatches_csv(message: types.Message):
     inv = await load_inventory()
