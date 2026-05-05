@@ -19,4 +19,4 @@ DATA_FILES = {
 }
 
 # ID ïîëüçîâàòåëåé, êîòîðûì ðàçðåø¸í äîñòóï (ìîæíî ðàñøèðèòü)
-ALLOWED_USERS = []  # çàìåíè íà ñâîé Telegram ID
+ALLOWED_USERS = [398362790]  # çàìåíè íà ñâîé Telegram ID
