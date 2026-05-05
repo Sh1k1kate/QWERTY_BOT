@@ -127,7 +127,6 @@ async def start_fill_sequence(message: types.Message, state: FSMContext):
         ], resize_keyboard=True)
     )
 
-# Шаг 1: монитор -> мышь
 @router.message(TechFill.monitor)
 async def process_monitor(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -142,7 +141,6 @@ async def process_monitor(message: types.Message, state: FSMContext):
         reply_markup=_build_keyboard([["Нет проблем", "Не работает", "Другое (указать в заметках)"]], resize_keyboard=True)
     )
 
-# Шаг 2: мышь -> клавиатура
 @router.message(TechFill.mouse)
 async def process_mouse(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -160,7 +158,6 @@ async def process_mouse(message: types.Message, state: FSMContext):
         ], resize_keyboard=True)
     )
 
-# Шаг 3: клавиатура -> диски
 @router.message(TechFill.keyboard)
 async def process_keyboard(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -175,7 +172,6 @@ async def process_keyboard(message: types.Message, state: FSMContext):
         reply_markup=_build_keyboard([["Есть ещё место", "Отсутствует диск", "Другое (указать в заметках)"]], resize_keyboard=True)
     )
 
-# Шаг 4: диски -> звук
 @router.message(TechFill.disks)
 async def process_disks(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -190,7 +186,6 @@ async def process_disks(message: types.Message, state: FSMContext):
         reply_markup=_build_keyboard([["Нет проблем", "Нет Аудиокарты", "Другое (указать в заметках)"]], resize_keyboard=True)
     )
 
-# Шаг 5: звук -> заметки
 @router.message(TechFill.sound)
 async def process_sound(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -202,7 +197,6 @@ async def process_sound(message: types.Message, state: FSMContext):
     await state.set_state(TechFill.notes)
     await message.answer("Введите заметки (или «-», если нет):", reply_markup=ReplyKeyboardRemove())
 
-# Шаг 6: заметки -> сохранение и переход
 @router.message(TechFill.notes)
 async def process_notes(message: types.Message, state: FSMContext):
     data = await state.get_data()
