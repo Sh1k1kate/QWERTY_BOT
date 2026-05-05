@@ -1,6 +1,6 @@
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
-from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from keyboards import tech_menu, computers_map_keyboard
 from github_api import get_file_content, save_file_content
 from states import TechFill
@@ -52,14 +52,7 @@ async def back_to_main(message: types.Message):
     await message.answer("Главное меню", reply_markup=main_menu)
 
 @router.message(F.text == "🗺️ Карта компьютеров")
-@router.callback_query(F.data == "refresh_map")
-async def show_computers_map(event: types.Message | types.CallbackQuery):
-    if isinstance(event, types.CallbackQuery):
-        message = event.message
-        await event.answer()
-    else:
-        message = event
-
+async def show_map_message(message: types.Message):
     data = await load_tech_data()
     computers = data["computers"]
 
@@ -68,15 +61,28 @@ async def show_computers_map(event: types.Message | types.CallbackQuery):
         status = get_computer_status(comp)
         status_dict[comp["num"]] = STATUS_ICONS[status]
 
-    if isinstance(event, types.CallbackQuery):
-        await message.edit_reply_markup(
-            reply_markup=computers_map_keyboard(computers, status_dict)
-        )
-    else:
-        await message.answer(
-            "Компьютеры (нажмите для деталей):",
-            reply_markup=computers_map_keyboard(computers, status_dict)
-        )
+    await message.answer(
+        "Компьютеры (нажмите для деталей):",
+        reply_markup=computers_map_keyboard(computers, status_dict)
+    )
+
+# При нажатии «Обновить» просто удаляем текущее сообщение и отправляем новую карту
+@router.callback_query(F.data == "refresh_map")
+async def refresh_map(callback: types.CallbackQuery):
+    await callback.message.delete()
+    data = await load_tech_data()
+    computers = data["computers"]
+
+    status_dict = {}
+    for comp in computers:
+        status = get_computer_status(comp)
+        status_dict[comp["num"]] = STATUS_ICONS[status]
+
+    await callback.message.answer(
+        "Компьютеры (нажмите для деталей):",
+        reply_markup=computers_map_keyboard(computers, status_dict)
+    )
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("comp_"))
 async def show_computer_detail(callback: types.CallbackQuery):
