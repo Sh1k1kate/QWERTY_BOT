@@ -13,4 +13,4 @@ DATA_FILES = {
     "history": "history.json"
 }
 
-ALLOWED_USERS = [123456789]  # ← замени на свой Telegram ID !!!
+ALLOWED_USERS = [398362790]  # ← замени на свой Telegram ID !!!
