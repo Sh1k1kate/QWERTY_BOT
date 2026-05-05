@@ -304,8 +304,9 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
     if not message.document.file_name.endswith('.csv'):
         await message.answer("Пожалуйста, отправьте файл с расширением .csv")
         return
-    file = await bot.get_file(message.document.file_id)
-    content = await bot.download_file(file.file_path)
+    # Используем router.bot вместо bot
+    file = await router.bot.get_file(message.document.file_id)
+    content = await router.bot.download_file(file.file_path)
     csv_text = content.decode('utf-8-sig')
 
     lines = csv_text.splitlines()
