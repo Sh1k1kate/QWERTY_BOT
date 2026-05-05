@@ -29,6 +29,7 @@ inv_menu = ReplyKeyboardMarkup(
         [KeyboardButton(text="📋 Все товары")],
         [KeyboardButton(text="⚠️ Только расхождения")],
         [KeyboardButton(text="🔍 Поиск по названию")],
+        [KeyboardButton(text="🔍 По штрихкоду")],           # ← новая
         [KeyboardButton(text="💾 Сохранить в GitHub")],
         [KeyboardButton(text="📎 CSV расхождений")],
         [KeyboardButton(text="🔙 Главное меню")]
@@ -55,11 +56,22 @@ def computers_map_keyboard(computers: list, status: dict):
     kb.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_map")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-def items_pagination_kb(page: int, total_pages: int):
+def items_pagination_kb(page: int, total_pages: int, items_on_page: list = None):
+    """Клавиатура пагинации + кнопка ✏️ для каждого товара (если передан список)"""
     buttons = []
+    if items_on_page:
+        for item in items_on_page:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"✏️ {item['name'][:30]}",
+                    callback_data=f"edit_qty_{item['id']}"
+                )
+            ])
+    nav = []
     if page > 0:
-        buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"inv_page_{page-1}"))
+        nav.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"inv_page_{page-1}"))
     if page < total_pages - 1:
-        buttons.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"inv_page_{page+1}"))
-    kb = [buttons] if buttons else []
-    return InlineKeyboardMarkup(inline_keyboard=kb)
+        nav.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"inv_page_{page+1}"))
+    if nav:
+        buttons.append(nav)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
