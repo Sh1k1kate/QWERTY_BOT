@@ -217,7 +217,8 @@ async def export_csv(message: types.Message):
     await message.answer_document(types.BufferedInputFile(csv.encode("utf-8"), "tech_report.csv"), caption="CSV отчёт")
 
 # ---------- Редактирование конкретного компьютера ----------
-@router.callback_query(F.data.startswith("edit_"))
+# Изменено: используем regexp, чтобы не пересекаться с edit_qty_...
+@router.callback_query(F.data.regexp(r"^edit_\d+$"))
 async def edit_computer_callback(callback: types.CallbackQuery, state: FSMContext):
     num = int(callback.data.split("_")[1])
     data = await load_tech_data()
