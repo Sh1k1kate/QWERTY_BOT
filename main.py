@@ -13,6 +13,7 @@ dp = Dispatcher()
 dp.include_router(tech_router)
 dp.include_router(inv_router)
 
+# ------- Команды общего назначения -------
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer("Добро пожаловать! Выберите раздел:", reply_markup=main_menu)
@@ -21,6 +22,18 @@ async def cmd_start(message: types.Message):
 async def cmd_help(message: types.Message):
     await message.answer("Бот для техотчёта и инвентаризации.")
 
+# Отмена текущего FSM-состояния
+@dp.message(Command("cancel"))
+@dp.message(F.text.casefold() == "/cancel")
+async def cmd_cancel(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is not None:
+        await state.clear()
+        await message.answer("Действие отменено.", reply_markup=main_menu)
+    else:
+        await message.answer("Нет активных действий для отмены.", reply_markup=main_menu)
+
+# ---------- Health-check ----------
 async def health_handler(request):
     return web.Response(text="OK", status=200)
 
@@ -30,7 +43,6 @@ def create_web_app():
     return app
 
 async def main():
-    # Вот эта строка сбрасывает все старые подключения
     await bot.delete_webhook(drop_pending_updates=True)
 
     polling_task = asyncio.create_task(dp.start_polling(bot))
