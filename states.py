@@ -1,8 +1,7 @@
 from aiogram.fsm.state import State, StatesGroup
 
-# Заполнение техотчёта по шагам
 class TechFill(StatesGroup):
-    choosing_computer = State()   # ожидание номера компьютера (опционально)
+    choosing_computer = State()
     monitor = State()
     mouse = State()
     keyboard = State()
@@ -10,10 +9,11 @@ class TechFill(StatesGroup):
     sound = State()
     notes = State()
 
-# Ввод фактического остатка
 class InventoryEdit(StatesGroup):
     waiting_for_quantity = State()
 
-# Поиск товара
 class InventorySearch(StatesGroup):
     waiting_for_query = State()
+
+class BarcodeScan(StatesGroup):
+    waiting_for_barcode = State()
