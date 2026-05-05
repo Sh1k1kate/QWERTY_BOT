@@ -1,36 +1,45 @@
-﻿from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    ReplyKeyboardMarkup,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    KeyboardButton
+)
 
+# Главное меню
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
-        ["📊 Инвентаризация"],
-        ["🖥️ Техотчёт"]
+        [KeyboardButton(text="📊 Инвентаризация")],
+        [KeyboardButton(text="🖥️ Техотчёт")]
     ],
     resize_keyboard=True,
     one_time_keyboard=True
 )
 
+# Меню техотчёта
 tech_menu = ReplyKeyboardMarkup(
     keyboard=[
-        ["🗺️ Карта компьютеров"],
-        ["📝 Начать заполнение"],
-        ["📥 CSV отчёт"],          # вместо Excel (CSV проще)
-        ["🔙 Главное меню"]
+        [KeyboardButton(text="🗺️ Карта компьютеров")],
+        [KeyboardButton(text="📝 Начать заполнение")],
+        [KeyboardButton(text="📥 CSV отчёт")],
+        [KeyboardButton(text="🔙 Главное меню")]
     ],
     resize_keyboard=True
 )
 
+# Меню инвентаризации
 inv_menu = ReplyKeyboardMarkup(
     keyboard=[
-        ["📋 Все товары"],
-        ["⚠️ Только расхождения"],
-        ["🔍 Поиск по названию"],
-        ["💾 Сохранить в GitHub"],
-        ["📎 CSV расхождений"],
-        ["🔙 Главное меню"]
+        [KeyboardButton(text="📋 Все товары")],
+        [KeyboardButton(text="⚠️ Только расхождения")],
+        [KeyboardButton(text="🔍 Поиск по названию")],
+        [KeyboardButton(text="💾 Сохранить в GitHub")],
+        [KeyboardButton(text="📎 CSV расхождений")],
+        [KeyboardButton(text="🔙 Главное меню")]
     ],
     resize_keyboard=True
 )
 
+# Inline-клавиатура для карты компьютеров
 def computers_map_keyboard(computers: list, status: dict):
     """Inline‑кнопки с номерами и эмодзи состояния."""
     kb = []
@@ -48,7 +57,7 @@ def computers_map_keyboard(computers: list, status: dict):
             row = []
     if row:
         kb.append(row)
-    # Добавим кнопку "Обновить"
+    # Кнопка обновления
     kb.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_map")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
