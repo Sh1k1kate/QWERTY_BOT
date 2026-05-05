@@ -127,44 +127,70 @@ async def start_fill_sequence(message: types.Message, state: FSMContext):
         ], resize_keyboard=True)
     )
 
-async def ask_next_field(message, state, field_name, options, next_state):
+# Шаг 1: монитор -> мышь
+@router.message(TechFill.monitor)
+async def process_monitor(message: types.Message, state: FSMContext):
     data = await state.get_data()
     tech_data = data["tech_data"]
     idx = data["current_index"]
     comp = tech_data["computers"][idx]
-    comp[field_name] = message.text.strip()
+    comp["monitor"] = message.text.strip()
     await state.update_data(tech_data=tech_data)
-    await state.set_state(next_state)
+    await state.set_state(TechFill.mouse)
     await message.answer(
-        f"Компьютер {comp['num']}\nТеперь выберите состояние «{field_name}»:",
-        reply_markup=_build_keyboard(options, resize_keyboard=True)
+        f"Компьютер {comp['num']}\nСостояние мыши:",
+        reply_markup=_build_keyboard([["Нет проблем", "Не работает", "Другое (указать в заметках)"]], resize_keyboard=True)
     )
 
-@router.message(TechFill.monitor)
-async def process_monitor(message: types.Message, state: FSMContext):
-    await ask_next_field(message, state, "monitor",
-                         [["Нет проблем", "Не работает", "Другое (указать в заметках)"]],
-                         TechFill.mouse)
-
+# Шаг 2: мышь -> клавиатура
 @router.message(TechFill.mouse)
 async def process_mouse(message: types.Message, state: FSMContext):
-    await ask_next_field(message, state, "mouse",
-                         [["Нет проблем", "Нет резиновых ножек", "Залипает клавиша"],
-                          ["Другое (указать в заметках)"]],
-                         TechFill.keyboard)
+    data = await state.get_data()
+    tech_data = data["tech_data"]
+    idx = data["current_index"]
+    comp = tech_data["computers"][idx]
+    comp["mouse"] = message.text.strip()
+    await state.update_data(tech_data=tech_data)
+    await state.set_state(TechFill.keyboard)
+    await message.answer(
+        f"Компьютер {comp['num']}\nСостояние клавиатуры:",
+        reply_markup=_build_keyboard([
+            ["Нет проблем", "Нет резиновых ножек", "Залипает клавиша"],
+            ["Другое (указать в заметках)"]
+        ], resize_keyboard=True)
+    )
 
+# Шаг 3: клавиатура -> диски
 @router.message(TechFill.keyboard)
 async def process_keyboard(message: types.Message, state: FSMContext):
-    await ask_next_field(message, state, "keyboard",
-                         [["Есть ещё место", "Отсутствует диск", "Другое (указать в заметках)"]],
-                         TechFill.disks)
+    data = await state.get_data()
+    tech_data = data["tech_data"]
+    idx = data["current_index"]
+    comp = tech_data["computers"][idx]
+    comp["keyboard"] = message.text.strip()
+    await state.update_data(tech_data=tech_data)
+    await state.set_state(TechFill.disks)
+    await message.answer(
+        f"Компьютер {comp['num']}\nСостояние дисков:",
+        reply_markup=_build_keyboard([["Есть ещё место", "Отсутствует диск", "Другое (указать в заметках)"]], resize_keyboard=True)
+    )
 
+# Шаг 4: диски -> звук
 @router.message(TechFill.disks)
 async def process_disks(message: types.Message, state: FSMContext):
-    await ask_next_field(message, state, "disks",
-                         [["Нет проблем", "Нет Аудиокарты", "Другое (указать в заметках)"]],
-                         TechFill.sound)
+    data = await state.get_data()
+    tech_data = data["tech_data"]
+    idx = data["current_index"]
+    comp = tech_data["computers"][idx]
+    comp["disks"] = message.text.strip()
+    await state.update_data(tech_data=tech_data)
+    await state.set_state(TechFill.sound)
+    await message.answer(
+        f"Компьютер {comp['num']}\nСостояние звука:",
+        reply_markup=_build_keyboard([["Нет проблем", "Нет Аудиокарты", "Другое (указать в заметках)"]], resize_keyboard=True)
+    )
 
+# Шаг 5: звук -> заметки
 @router.message(TechFill.sound)
 async def process_sound(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -176,6 +202,7 @@ async def process_sound(message: types.Message, state: FSMContext):
     await state.set_state(TechFill.notes)
     await message.answer("Введите заметки (или «-», если нет):", reply_markup=ReplyKeyboardRemove())
 
+# Шаг 6: заметки -> сохранение и переход
 @router.message(TechFill.notes)
 async def process_notes(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -217,7 +244,6 @@ async def export_csv(message: types.Message):
     await message.answer_document(types.BufferedInputFile(csv.encode("utf-8"), "tech_report.csv"), caption="CSV отчёт")
 
 # ---------- Редактирование конкретного компьютера ----------
-# Изменено: используем regexp, чтобы не пересекаться с edit_qty_...
 @router.callback_query(F.data.regexp(r"^edit_\d+$"))
 async def edit_computer_callback(callback: types.CallbackQuery, state: FSMContext):
     num = int(callback.data.split("_")[1])
