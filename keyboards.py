@@ -5,7 +5,6 @@ from aiogram.types import (
     KeyboardButton
 )
 
-# Главное меню
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📊 Инвентаризация")],
@@ -15,7 +14,6 @@ main_menu = ReplyKeyboardMarkup(
     one_time_keyboard=True
 )
 
-# Меню техотчёта
 tech_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🗺️ Карта компьютеров")],
@@ -26,7 +24,6 @@ tech_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Меню инвентаризации
 inv_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📋 Все товары")],
@@ -39,9 +36,7 @@ inv_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Inline-клавиатура для карты компьютеров
 def computers_map_keyboard(computers: list, status: dict):
-    """Inline‑кнопки с номерами и эмодзи состояния."""
     kb = []
     row = []
     for comp in computers:
@@ -57,11 +52,9 @@ def computers_map_keyboard(computers: list, status: dict):
             row = []
     if row:
         kb.append(row)
-    # Кнопка обновления
     kb.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_map")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-# Пагинация для списка товаров
 def items_pagination_kb(page: int, total_pages: int):
     buttons = []
     if page > 0:
