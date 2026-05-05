@@ -304,10 +304,10 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
     if not message.document.file_name.endswith('.csv'):
         await message.answer("Пожалуйста, отправьте файл с расширением .csv")
         return
-    # Используем router.bot вместо bot
+    # Используем router.bot и правильно читаем BytesIO
     file = await router.bot.get_file(message.document.file_id)
     content = await router.bot.download_file(file.file_path)
-    csv_text = content.decode('utf-8-sig')
+    csv_text = content.getvalue().decode('utf-8-sig')
 
     lines = csv_text.splitlines()
     if len(lines) < 2:
