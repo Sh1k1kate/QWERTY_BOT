@@ -19,6 +19,7 @@ tech_menu = ReplyKeyboardMarkup(
         [KeyboardButton(text="🗺️ Карта компьютеров")],
         [KeyboardButton(text="📝 Начать заполнение")],
         [KeyboardButton(text="📥 CSV отчёт")],
+        [KeyboardButton(text="📥 Загрузить CSV отчёт")],
         [KeyboardButton(text="🔙 Главное меню")]
     ],
     resize_keyboard=True
@@ -29,7 +30,10 @@ inv_menu = ReplyKeyboardMarkup(
         [KeyboardButton(text="📋 Все товары")],
         [KeyboardButton(text="⚠️ Только расхождения")],
         [KeyboardButton(text="🔍 Поиск по названию")],
-        [KeyboardButton(text="🔍 По штрихкоду")],           # ← новая
+        [KeyboardButton(text="🔍 По штрихкоду")],
+        [KeyboardButton(text="➕ Добавить товар")],
+        [KeyboardButton(text="📁 Загрузить CSV (1С)")],
+        [KeyboardButton(text="📜 История")],
         [KeyboardButton(text="💾 Сохранить в GitHub")],
         [KeyboardButton(text="📎 CSV расхождений")],
         [KeyboardButton(text="🔙 Главное меню")]
@@ -37,35 +41,38 @@ inv_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-def computers_map_keyboard(computers: list, status: dict):
+def computers_map_keyboard(computers: list, status: dict, filter_status: str = "all"):
     kb = []
+    # Строка фильтров
+    filter_buttons = []
+    for s, label in [("all", "Все"), ("good", "✅"), ("warning", "⚠️"), ("bad", "🔴")]:
+        prefix = "✓ " if s == filter_status else ""
+        filter_buttons.append(InlineKeyboardButton(text=f"{prefix}{label}", callback_data=f"map_filter_{s}"))
+    kb.append(filter_buttons)
+
+    # Компьютеры
     row = []
     for comp in computers:
         icon = status.get(comp["num"], "✅")
-        row.append(
-            InlineKeyboardButton(
-                text=f"{comp['num']}{icon}",
-                callback_data=f"comp_{comp['num']}"
-            )
-        )
-        if len(row) == 6:
-            kb.append(row)
-            row = []
+        comp_status = "good"  # default
+        if icon == "⚠️": comp_status = "warning"
+        elif icon == "🔴": comp_status = "bad"
+        if filter_status == "all" or comp_status == filter_status:
+            row.append(InlineKeyboardButton(text=f"{comp['num']}{icon}", callback_data=f"comp_{comp['num']}"))
+            if len(row) == 6:
+                kb.append(row)
+                row = []
     if row:
         kb.append(row)
     kb.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_map")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-def items_pagination_kb(page: int, total_pages: int, items_on_page: list = None):
-    """Клавиатура пагинации + кнопка ✏️ для каждого товара (если передан список)"""
+def items_pagination_kb(page: int, total_pages: int, items_on_page: list = None, stock_filter: bool = False):
     buttons = []
     if items_on_page:
         for item in items_on_page:
             buttons.append([
-                InlineKeyboardButton(
-                    text=f"✏️ {item['name'][:30]}",
-                    callback_data=f"edit_qty_{item['id']}"
-                )
+                InlineKeyboardButton(text=f"✏️ {item['name'][:30]}", callback_data=f"edit_qty_{item['id']}")
             ])
     nav = []
     if page > 0:
@@ -74,4 +81,7 @@ def items_pagination_kb(page: int, total_pages: int, items_on_page: list = None)
         nav.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"inv_page_{page+1}"))
     if nav:
         buttons.append(nav)
+    # Переключатель фильтра
+    stock_text = "📦 Только с остатком: ВЫКЛ" if stock_filter else "📦 Только с остатком: ВКЛ"
+    buttons.append([InlineKeyboardButton(text=stock_text, callback_data="toggle_stock_filter")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
