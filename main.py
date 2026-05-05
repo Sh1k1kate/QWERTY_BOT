@@ -14,6 +14,10 @@ dp = Dispatcher()
 dp.include_router(tech_router)
 dp.include_router(inv_router)
 
+# Прокидываем объект бота в роутеры, чтобы они могли его использовать
+tech_router.bot = bot
+inv_router.bot = bot
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer("Добро пожаловать! Выберите раздел:", reply_markup=main_menu)
