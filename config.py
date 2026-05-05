@@ -1,16 +1,11 @@
 import os
 
-# Òîêåí áîòà – ïîëó÷èòü ó @BotFather
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-
-# GitHub Personal Access Token (íóæíû ïðàâà repo)
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 
-# Íàñòðîéêè ðåïîçèòîðèÿ
 OWNER = "Sh1k1kate"
 REPO = "Technical-Review-QWERTY_GAME_ZONE"
 
-# Ôàéëû äàííûõ â ðåïîçèòîðèè
 DATA_FILES = {
     "tech_report": "tech_report_data.json",
     "products_master": "products_master.json",
@@ -18,5 +13,4 @@ DATA_FILES = {
     "history": "history.json"
 }
 
-# ID ïîëüçîâàòåëåé, êîòîðûì ðàçðåø¸í äîñòóï (ìîæíî ðàñøèðèòü)
-ALLOWED_USERS = [398362790]  # çàìåíè íà ñâîé Telegram ID
+ALLOWED_USERS = [123456789]  # ← замени на свой Telegram ID !!!
