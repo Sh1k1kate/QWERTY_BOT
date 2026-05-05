@@ -10,3 +10,13 @@ class TechFill(StatesGroup):
 
 class InventorySearch(StatesGroup):
     waiting_for_query = State()
+
+class BarcodeSearch(StatesGroup):
+    waiting_for_barcode = State()
+
+class InventoryAdd(StatesGroup):
+    category = State()
+    name = State()
+    barcode = State()
+    system_qty = State()
+    fact_qty = State()
