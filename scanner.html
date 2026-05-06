@@ -6,13 +6,13 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body { margin: 0; background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
-        video { width: 100%; max-height: 100vh; object-fit: cover; }
-        #status { color: white; font-size: 18px; position: absolute; top: 20px; background: rgba(0,0,0,0.7); padding: 8px 16px; border-radius: 20px; }
+        video { width: 100%; max-height: 100vh; object-fit: cover; display: none; }
+        #status { color: white; font-size: 18px; position: absolute; top: 20px; background: rgba(0,0,0,0.7); padding: 8px 16px; border-radius: 20px; text-align: center; }
     </style>
 </head>
 <body>
     <video id="video" autoplay playsinline></video>
-    <div id="status">Наведите камеру на штрихкод</div>
+    <div id="status">Ожидание разрешения камеры...</div>
     <script>
         const tg = window.Telegram.WebApp;
         tg.ready();
@@ -20,11 +20,22 @@
 
         async function startScanner() {
             try {
+                // 1. Запрашиваем доступ через API Telegram
+                const granted = await tg.requestCameraAccess();
+                if (!granted) {
+                    document.getElementById('status').textContent = 'Доступ к камере не предоставлен';
+                    return;
+                }
+                document.getElementById('status').textContent = 'Наведите камеру на штрихкод';
+
+                // 2. Получаем видеопоток
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
                 const video = document.getElementById('video');
                 video.srcObject = stream;
+                video.style.display = 'block';
                 await video.play();
 
+                // 3. Детектор штрихкодов
                 const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code'] });
 
                 async function scan() {
@@ -42,7 +53,7 @@
                 }
                 scan();
             } catch (err) {
-                document.getElementById('status').textContent = 'Ошибка доступа к камере';
+                document.getElementById('status').textContent = 'Ошибка доступа к камере. Убедитесь, что камера подключена и не используется другим приложением.';
             }
         }
         startScanner();
