@@ -1,7 +1,7 @@
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton, ContentType
 from keyboards import inv_menu, items_pagination_kb
 from github_api import get_file_content, save_file_content
 from states import InventorySearch, BarcodeSearch, InventoryAdd
@@ -59,7 +59,7 @@ async def load_history():
 async def save_history(history: list):
     await save_file_content("history.json", history, "Update history")
 
-# ---------- Синхронизация инвентаризации с мастером (при первом запуске) ----------
+# ---------- Синхронизация с мастером ----------
 async def sync_inventory_from_master():
     master = await load_master()
     if not master:
@@ -67,16 +67,16 @@ async def sync_inventory_from_master():
     inventory = await load_inventory()
     if inventory is not None and len(inventory) > 0:
         return False
-    new_inventory = []
+    new_inv = []
     for p in master:
-        new_inventory.append({
+        new_inv.append({
             "id": p["id"],
             "category": p.get("category", ""),
             "name": p.get("name", ""),
             "systemQuantity": p.get("systemQuantity", 0),
             "factQuantity": p.get("lastFactQuantity", p.get("systemQuantity", 0))
         })
-    await save_inventory(new_inventory)
+    await save_inventory(new_inv)
     return True
 
 def apply_stock_filter(items: list) -> list:
@@ -117,7 +117,7 @@ async def show_inv_menu(message: types.Message):
         if await sync_inventory_from_master():
             await message.answer("✅ Инвентаризация успешно создана на основе мастера.")
         else:
-            await message.answer("❌ Не удалось создать инвентаризацию. Проверьте мастер‑файл и GitHub‑токен.")
+            await message.answer("❌ Не удалось создать инвентаризацию.")
     await message.answer("Управление инвентаризацией:", reply_markup=inv_menu)
 
 @router.message(F.text == "📋 Все товары")
@@ -127,7 +127,7 @@ async def show_all_items(message: types.Message, state: FSMContext):
         if await sync_inventory_from_master():
             items = await load_inventory()
     if not items:
-        await message.answer("📭 Инвентаризация пуста.\nЗагрузите CSV (1С) или добавьте товар вручную.", reply_markup=inv_menu)
+        await message.answer("📭 Инвентаризация пуста.", reply_markup=inv_menu)
         return
     filtered = apply_stock_filter(items)
     await state.update_data(inv_items=filtered, current_page=0)
@@ -190,6 +190,50 @@ async def search_execute(message: types.Message, state: FSMContext):
         kb = items_pagination_kb(0, total_pages, chunk, stock_filter_active)
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
+# ---------- Обработка штрихкодов ----------
+async def find_item_by_barcode(barcode: str):
+    """Ищет товар в мастер‑файле, затем в инвентаризации. Возвращает (product, inv_item) или (None, None)."""
+    master = await load_master()
+    inventory = await load_inventory()
+    product = next((p for p in master if p.get("barcode") == barcode), None)
+    if product:
+        inv_item = next((i for i in inventory if i["id"] == product["id"]), None)
+        return product, inv_item
+    return None, None
+
+async def start_edit_quantity(message: types.Message, state: FSMContext, item: dict):
+    """Запускает FSM для ввода нового фактического остатка."""
+    await state.update_data(edit_item_id=item["id"])
+    await state.set_state(InventoryEdit.waiting_for_quantity)
+    await message.answer(
+        f"✏️ Введите фактический остаток для товара:\n<b>{item['name']}</b>\n"
+        f"Текущее значение: {item['factQuantity']}\nДля отмены /cancel",
+        parse_mode="HTML", reply_markup=ReplyKeyboardRemove()
+    )
+
+# Данные от Mini App (сканирование камерой)
+@router.message(F.content_type == ContentType.WEB_APP_DATA)
+async def handle_web_app_data(message: types.Message, state: FSMContext):
+    barcode = message.web_app_data.data
+    product, inv_item = await find_item_by_barcode(barcode)
+    if inv_item:
+        # Показываем информацию и сразу предлагаем редактировать остаток
+        text = (
+            f"🔍 Товар найден:\n"
+            f"<b>{inv_item['name']}</b>\n"
+            f"Категория: {inv_item.get('category', '')}\n"
+            f"Учётный остаток: {inv_item.get('systemQuantity', 0)}\n"
+            f"Фактический: {inv_item.get('factQuantity', 0)}\n"
+            f"Штрихкод: {barcode}"
+        )
+        await message.answer(text, parse_mode="HTML")
+        await start_edit_quantity(message, state, inv_item)
+    elif product:
+        await message.answer("Товар есть в мастер‑файле, но отсутствует в инвентаризации. Добавьте его через меню.")
+    else:
+        await message.answer(f"Товар со штрихкодом {barcode} не найден.\nИспользуйте «➕ Добавить товар».")
+
+# Текстовый ввод штрихкода
 @router.message(F.text == "🔍 По штрихкоду")
 async def barcode_search_start(message: types.Message, state: FSMContext):
     await state.set_state(BarcodeSearch.waiting_for_barcode)
@@ -198,29 +242,26 @@ async def barcode_search_start(message: types.Message, state: FSMContext):
 @router.message(BarcodeSearch.waiting_for_barcode)
 async def barcode_search_execute(message: types.Message, state: FSMContext):
     barcode = message.text.strip()
-    master = await load_master()
-    inventory = await load_inventory()
-    product = next((p for p in master if p.get("barcode") == barcode), None)
-    if product:
-        inv_item = next((i for i in inventory if i["id"] == product["id"]), None)
-        if inv_item:
-            text = (
-                f"🔍 Товар найден:\n"
-                f"<b>{inv_item['name']}</b>\n"
-                f"Категория: {inv_item.get('category', '')}\n"
-                f"Учётный остаток: {inv_item.get('systemQuantity', 0)}\n"
-                f"Фактический: {inv_item.get('factQuantity', 0)}\n"
-                f"Штрихкод: {barcode}"
-            )
-            await message.answer(text, parse_mode="HTML")
-        else:
-            await message.answer("Товар есть в мастер-файле, но отсутствует в инвентаризации.")
+    product, inv_item = await find_item_by_barcode(barcode)
+    if inv_item:
+        text = (
+            f"🔍 Товар найден:\n"
+            f"<b>{inv_item['name']}</b>\n"
+            f"Категория: {inv_item.get('category', '')}\n"
+            f"Учётный остаток: {inv_item.get('systemQuantity', 0)}\n"
+            f"Фактический: {inv_item.get('factQuantity', 0)}\n"
+            f"Штрихкод: {barcode}"
+        )
+        await message.answer(text, parse_mode="HTML")
+        await start_edit_quantity(message, state, inv_item)
+    elif product:
+        await message.answer("Товар есть в мастер‑файле, но отсутствует в инвентаризации.")
     else:
         await message.answer(f"Товар со штрихкодом {barcode} не найден.")
     await state.clear()
     await message.answer("Меню инвентаризации:", reply_markup=inv_menu)
 
-# ---------- Редактирование остатка ----------
+# ---------- Редактирование остатка (универсальное) ----------
 @router.callback_query(F.data.startswith("edit_qty_"))
 async def edit_quantity_prompt(callback: types.CallbackQuery, state: FSMContext):
     item_id = int(callback.data.split("_")[2])
@@ -252,7 +293,6 @@ async def process_new_quantity(message: types.Message, state: FSMContext):
     if item:
         item["factQuantity"] = new_qty
         await save_inventory(items)
-        # История
         history = await load_history()
         history.append({
             "timestamp": int(datetime.datetime.now().timestamp() * 1000),
@@ -344,7 +384,7 @@ async def add_item_fact_qty(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(f"✅ Товар добавлен: {data['name']}", reply_markup=inv_menu)
 
-# ---------- Загрузка CSV (1С) с обновлением мастера ----------
+# ---------- Загрузка CSV (1С) ----------
 @router.message(F.text == "📁 Загрузить CSV (1С)")
 async def csv_prompt(message: types.Message, state: FSMContext):
     await message.answer("Отправьте CSV-файл (разделитель ';'), полученный из 1С.", reply_markup=ReplyKeyboardRemove())
@@ -391,14 +431,11 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
             qty = 0
         barcode = cols[barcode_idx].strip() if barcode_idx is not None and barcode_idx < len(cols) else ''
 
-        # Ищем существующий продукт
         existing = next((p for p in master if p['category'].lower() == category.lower() and p['name'].lower() == name.lower()), None)
         if existing:
-            # Обновляем системное количество, категорию, название
             existing['systemQuantity'] = qty
             existing['category'] = category
             existing['name'] = name
-            # Штрихкод обновляем ТОЛЬКО если в CSV он не пустой и в мастере его ещё нет
             if barcode and not existing.get('barcode'):
                 existing['barcode'] = barcode
             updated += 1
@@ -408,7 +445,7 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
                 "id": new_id,
                 "category": category,
                 "name": name,
-                "barcode": barcode,   # новый товар – берём штрихкод из CSV (может быть пустым)
+                "barcode": barcode,
                 "systemQuantity": qty,
                 "lastFactQuantity": qty
             })
@@ -418,7 +455,6 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
     await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Update master from CSV")
     await message.answer(f"✅ Мастер обновлён: добавлено {added}, обновлено {updated} товаров.")
 
-    # Синхронизируем инвентаризацию с обновлённым мастером
     inventory = await load_inventory()
     for p in master:
         inv_item = next((i for i in inventory if i['id'] == p['id']), None)
@@ -437,30 +473,23 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
     await save_inventory(inventory)
     await message.answer("Инвентаризация синхронизирована.", reply_markup=inv_menu)
 
-# ---------- Сохранение в GitHub со слиянием в мастер ----------
+# ---------- Сохранение в GitHub (со слиянием в мастер) ----------
 @router.message(F.text == "💾 Сохранить в GitHub")
 async def save_to_github(message: types.Message):
     items = await load_inventory()
     if not items:
-        await message.answer("Инвентаризация пуста, нечего сохранять.")
+        await message.answer("Инвентаризация пуста.")
         return
     try:
-        # 1. Сохраняем инвентаризацию
         await save_inventory(items)
-
-        # 2. Загружаем мастер и сливаем фактические остатки
         master = await load_master()
         for inv_item in items:
             master_item = next((p for p in master if p['id'] == inv_item['id']), None)
             if master_item:
-                # Обновляем lastFactQuantity, не трогаем штрихкод
                 master_item['lastFactQuantity'] = inv_item['factQuantity']
-                # При необходимости можно также обновить название/категорию, если они изменились
-                # Но по логике сайта они берутся из мастера, так что не меняем.
-        # Сохраняем обновлённый мастер
         next_id = max([p["id"] for p in master], default=0) + 1
         await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Merge inventory into master")
-        await message.answer("✅ Инвентаризация сохранена, мастер-файл обновлён (lastFactQuantity).")
+        await message.answer("✅ Инвентаризация сохранена, мастер-файл обновлён.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
 
@@ -479,44 +508,7 @@ async def export_mismatches_csv(message: types.Message):
         types.BufferedInputFile(csv.encode("utf-8-sig"), "mismatches.csv"),
         caption=f"Расхождений: {len(mismatches)}"
     )
-# ---------- Обработка штрихкодов ----------
-async def process_barcode(barcode: str, message: types.Message):
-    """Ищет товар по штрихкоду в мастер‑файле и показывает результат."""
-    master = await load_master()
-    inventory = await load_inventory()
-    product = next((p for p in master if p.get("barcode") == barcode), None)
-    if product:
-        inv_item = next((i for i in inventory if i["id"] == product["id"]), None)
-        if inv_item:
-            text = (
-                f"🔍 Товар найден:\n"
-                f"<b>{inv_item['name']}</b>\n"
-                f"Категория: {inv_item.get('category', '')}\n"
-                f"Учётный остаток: {inv_item.get('systemQuantity', 0)}\n"
-                f"Фактический: {inv_item.get('factQuantity', 0)}\n"
-                f"Штрихкод: {barcode}"
-            )
-            await message.answer(text, parse_mode="HTML")
-        else:
-            await message.answer("Товар есть в мастер‑файле, но отсутствует в инвентаризации.")
-    else:
-        await message.answer(f"Товар со штрихкодом {barcode} не найден.\nИспользуйте «➕ Добавить товар».")
 
-# Хендлер данных от Mini App
-from aiogram.types import ContentType
-
-@router.message(F.content_type == ContentType.WEB_APP_DATA)
-async def handle_web_app_data(message: types.Message, state: FSMContext):
-    barcode = message.web_app_data.data
-    await process_barcode(barcode, message)
-
-# Обновлённый текстовый хендлер (вызываем ту же функцию)
-@router.message(BarcodeSearch.waiting_for_barcode)
-async def barcode_search_execute(message: types.Message, state: FSMContext):
-    barcode = message.text.strip()
-    await process_barcode(barcode, message)
-    await state.clear()
-    await message.answer("Меню инвентаризации:", reply_markup=inv_menu)
 # ---------- История ----------
 @router.message(F.text == "📜 История")
 async def history_menu(message: types.Message, state: FSMContext):
