@@ -12,12 +12,26 @@ from inventory import router as inv_router
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Проверка доступа (опционально)
+# Универсальный middleware проверки доступа
 class AccessMiddleware(BaseMiddleware):
-    async def __call__(self, handler, event: types.Message, data: dict):
-        if event.from_user.id not in ALLOWED_USERS:
-            await event.answer("⛔ Доступ запрещён.")
-            return
+    async def __call__(self, handler, event, data: dict):
+        # Пытаемся найти пользователя в разных типах апдейтов
+        user = None
+        if hasattr(event, 'from_user'):
+            user = event.from_user
+        elif hasattr(event, 'message') and event.message:
+            user = event.message.from_user
+        elif hasattr(event, 'callback_query') and event.callback_query:
+            user = event.callback_query.from_user
+        elif hasattr(event, 'inline_query') and event.inline_query:
+            user = event.inline_query.from_user
+        # Добавьте другие типы при необходимости
+
+        if user and user.id not in ALLOWED_USERS:
+            # Отвечаем, если есть способ (например, сообщение)
+            if hasattr(event, 'message') and event.message:
+                await event.message.answer("⛔ Доступ запрещён.")
+            return  # не передаём дальше
         return await handler(event, data)
 
 dp.update.outer_middleware(AccessMiddleware())
@@ -28,7 +42,6 @@ dp.include_router(inv_router)
 tech_router.bot = bot
 inv_router.bot = bot
 
-# Команды
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer("Добро пожаловать! Выберите раздел:", reply_markup=main_menu)
@@ -42,7 +55,7 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
     else:
         await message.answer("Нет активных действий.", reply_markup=main_menu)
 
-# ---------- HTTP‑сервер ----------
+# ---------- HTTP‑сервер (health + Mini App) ----------
 async def health_handler(request):
     return web.Response(text="OK", status=200)
 
@@ -59,7 +72,9 @@ def create_web_app():
     return app
 
 async def main():
+    # Убиваем старые сессии
     await bot.delete_webhook(drop_pending_updates=True)
+
     polling_task = asyncio.create_task(dp.start_polling(bot))
 
     port = int(os.environ.get("PORT", 8000))
