@@ -12,7 +12,7 @@ from inventory import router as inv_router
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Middleware проверки доступа
+# Проверка доступа (опционально)
 class AccessMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: types.Message, data: dict):
         if event.from_user.id not in ALLOWED_USERS:
@@ -28,6 +28,7 @@ dp.include_router(inv_router)
 tech_router.bot = bot
 inv_router.bot = bot
 
+# Команды
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer("Добро пожаловать! Выберите раздел:", reply_markup=main_menu)
@@ -41,17 +42,26 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
     else:
         await message.answer("Нет активных действий.", reply_markup=main_menu)
 
+# ---------- HTTP‑сервер ----------
 async def health_handler(request):
     return web.Response(text="OK", status=200)
+
+async def scanner_handler(request):
+    file_path = os.path.join(os.path.dirname(__file__), "scanner.html")
+    if not os.path.exists(file_path):
+        return web.Response(text="File not found", status=404)
+    return web.FileResponse(file_path)
 
 def create_web_app():
     app = web.Application()
     app.router.add_get("/health", health_handler)
+    app.router.add_get("/scanner", scanner_handler)
     return app
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     polling_task = asyncio.create_task(dp.start_polling(bot))
+
     port = int(os.environ.get("PORT", 8000))
     runner = web.AppRunner(create_web_app())
     await runner.setup()
