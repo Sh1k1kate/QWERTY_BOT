@@ -1,7 +1,7 @@
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 from keyboards import inv_menu, items_pagination_kb
 from github_api import get_file_content, save_file_content
 from states import InventorySearch, BarcodeSearch, InventoryAdd
@@ -16,13 +16,38 @@ class InventoryEdit(StatesGroup):
 
 stock_filter_active = False
 
+# ---------- Универсальная загрузка данных ----------
 async def load_master():
     data = await get_file_content("products_master.json")
-    return data.get("products", []) if data else []
+    if not data:
+        return []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if "products" in data:
+            return data["products"]
+        for key in ["items", "data"]:
+            if key in data and isinstance(data[key], list):
+                return data[key]
+        for v in data.values():
+            if isinstance(v, list):
+                return v
+    return []
 
 async def load_inventory():
     data = await get_file_content("inventory_data.json")
-    return data.get("items", []) if data else []
+    if not data:
+        return []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ["items", "products", "data"]:
+            if key in data and isinstance(data[key], list):
+                return data[key]
+        for v in data.values():
+            if isinstance(v, list):
+                return v
+    return []
 
 async def save_inventory(items: list):
     await save_file_content("inventory_data.json", {"items": items})
@@ -36,7 +61,7 @@ async def save_history(history: list):
 
 def apply_stock_filter(items: list) -> list:
     if stock_filter_active:
-        return [i for i in items if i["systemQuantity"] > 0]
+        return [i for i in items if i.get("systemQuantity", 0) > 0]
     return items
 
 def build_items_page(items: list, page: int = 0, per_page: int = ITEMS_PER_PAGE):
@@ -48,15 +73,18 @@ def build_items_page(items: list, page: int = 0, per_page: int = ITEMS_PER_PAGE)
 
     text = ""
     for item in chunk:
-        diff = item["factQuantity"] - item["systemQuantity"]
+        name = item.get('name', 'Без названия')
+        category = item.get('category', '')
+        sys_qty = item.get('systemQuantity', 0)
+        fact_qty = item.get('factQuantity', 0)
+        diff = fact_qty - sys_qty
         status = "⚠️" if diff != 0 else "✅"
         text += (
-            f"{status} <b>{item['name']}</b>\n"
-            f"   Категория: {item['category']}\n"
-            f"   Учёт: {item['systemQuantity']} | Факт: {item['factQuantity']} "
+            f"{status} <b>{name}</b>\n"
+            f"   Категория: {category}\n"
+            f"   Учёт: {sys_qty} | Факт: {fact_qty} "
             f"({diff:+.0f})\n\n"
         )
-
     text += f"Страница {page+1} из {total_pages} (показано {start+1}–{min(end, total)} из {total})"
     return text, total_pages, chunk
 
@@ -65,10 +93,12 @@ def build_items_page(items: list, page: int = 0, per_page: int = ITEMS_PER_PAGE)
 async def show_inv_menu(message: types.Message):
     await message.answer("Управление инвентаризацией:", reply_markup=inv_menu)
 
-# ---------- Все товары ----------
 @router.message(F.text == "📋 Все товары")
 async def show_all_items(message: types.Message, state: FSMContext):
     items = await load_inventory()
+    if not items:
+        await message.answer("📭 Инвентаризация пуста.\nЗагрузите CSV (1С) или добавьте товар вручную.", reply_markup=inv_menu)
+        return
     filtered = apply_stock_filter(items)
     await state.update_data(inv_items=filtered, current_page=0)
     text, total_pages, chunk = build_items_page(filtered, 0)
@@ -97,11 +127,10 @@ async def toggle_stock_filter(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await callback.answer()
 
-# ---------- Только расхождения ----------
 @router.message(F.text == "⚠️ Только расхождения")
 async def show_mismatches(message: types.Message, state: FSMContext):
     items = await load_inventory()
-    mismatches = [i for i in items if i["factQuantity"] != i["systemQuantity"]]
+    mismatches = [i for i in items if i.get("factQuantity", 0) != i.get("systemQuantity", 0)]
     filtered = apply_stock_filter(mismatches)
     await state.update_data(inv_items=filtered, current_page=0)
     if not filtered:
@@ -111,7 +140,6 @@ async def show_mismatches(message: types.Message, state: FSMContext):
         kb = items_pagination_kb(0, total_pages, chunk, stock_filter_active)
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
-# ---------- Поиск по названию ----------
 @router.message(F.text == "🔍 Поиск по названию")
 async def search_start(message: types.Message, state: FSMContext):
     await state.set_state(InventorySearch.waiting_for_query)
@@ -121,7 +149,7 @@ async def search_start(message: types.Message, state: FSMContext):
 async def search_execute(message: types.Message, state: FSMContext):
     query = message.text.strip().lower()
     items = await load_inventory()
-    matches = [i for i in items if query in i["name"].lower()]
+    matches = [i for i in items if query in i.get("name", "").lower()]
     filtered = apply_stock_filter(matches)
     await state.clear()
     if not filtered:
@@ -132,7 +160,6 @@ async def search_execute(message: types.Message, state: FSMContext):
         kb = items_pagination_kb(0, total_pages, chunk, stock_filter_active)
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
-# ---------- Поиск по штрихкоду ----------
 @router.message(F.text == "🔍 По штрихкоду")
 async def barcode_search_start(message: types.Message, state: FSMContext):
     await state.set_state(BarcodeSearch.waiting_for_barcode)
@@ -150,17 +177,16 @@ async def barcode_search_execute(message: types.Message, state: FSMContext):
             text = (
                 f"🔍 Товар найден:\n"
                 f"<b>{inv_item['name']}</b>\n"
-                f"Категория: {inv_item['category']}\n"
-                f"Учётный остаток: {inv_item['systemQuantity']}\n"
-                f"Фактический: {inv_item['factQuantity']}\n"
-                f"Штрихкод: {barcode}\n\n"
-                f"Используйте ✏️ для изменения остатка."
+                f"Категория: {inv_item.get('category', '')}\n"
+                f"Учётный остаток: {inv_item.get('systemQuantity', 0)}\n"
+                f"Фактический: {inv_item.get('factQuantity', 0)}\n"
+                f"Штрихкод: {barcode}"
             )
             await message.answer(text, parse_mode="HTML")
         else:
             await message.answer("Товар есть в мастер-файле, но отсутствует в инвентаризации.")
     else:
-        await message.answer(f"Товар со штрихкодом {barcode} не найден.\nИспользуйте «➕ Добавить товар».")
+        await message.answer(f"Товар со штрихкодом {barcode} не найден.")
     await state.clear()
     await message.answer("Меню инвентаризации:", reply_markup=inv_menu)
 
@@ -204,7 +230,7 @@ async def process_new_quantity(message: types.Message, state: FSMContext):
                 "factQuantity": new_qty,
                 "systemQuantity": item["systemQuantity"],
                 "name": item["name"],
-                "category": item["category"]
+                "category": item.get("category", "")
             }]
         })
         await save_history(history)
@@ -232,7 +258,7 @@ async def add_item_category(message: types.Message, state: FSMContext):
 async def add_item_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text.strip())
     await state.set_state(InventoryAdd.barcode)
-    await message.answer("Введите штрихкод (или поставьте прочерк '-'):")
+    await message.answer("Введите штрихкод (или '-' если нет):")
 
 @router.message(InventoryAdd.barcode)
 async def add_item_barcode(message: types.Message, state: FSMContext):
@@ -273,10 +299,8 @@ async def add_item_fact_qty(message: types.Message, state: FSMContext):
         "lastFactQuantity": fact
     }
     master.append(new_product)
-    # ВАЖНО: сохраняем nextId для совместимости с обновлённым сайтом
     next_id = max([p["id"] for p in master], default=0) + 1
     await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Add product from bot")
-
     inventory = await load_inventory()
     inventory.append({
         "id": new_id,
@@ -302,7 +326,6 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
     file = await router.bot.get_file(message.document.file_id)
     content = await router.bot.download_file(file.file_path)
     csv_text = content.getvalue().decode('utf-8-sig')
-
     lines = csv_text.splitlines()
     if len(lines) < 2:
         await message.answer("Файл пуст или не содержит данных.")
@@ -313,7 +336,6 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
     qty_idx = next((i for i, h in enumerate(headers) if 'Количество' in h), None)
     status_idx = next((i for i, h in enumerate(headers) if 'Статус' in h), None)
     barcode_idx = next((i for i, h in enumerate(headers) if h in ('Штрихкод', 'Barcode')), None)
-
     if name_idx is None or category_idx is None or qty_idx is None:
         await message.answer("CSV должен содержать столбцы 'Наименование', 'Категория', 'Количество'.")
         return
@@ -336,7 +358,6 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
         except ValueError:
             qty = 0
         barcode = cols[barcode_idx].strip() if barcode_idx is not None and barcode_idx < len(cols) else ''
-
         existing = next((p for p in master if p['category'].lower() == category.lower() and p['name'].lower() == name.lower()), None)
         if existing:
             existing['systemQuantity'] = qty
@@ -346,20 +367,14 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
         else:
             new_id = max([p['id'] for p in master], default=0) + 1
             master.append({
-                "id": new_id,
-                "category": category,
-                "name": name,
-                "barcode": barcode,
-                "systemQuantity": qty,
-                "lastFactQuantity": qty
+                "id": new_id, "category": category, "name": name,
+                "barcode": barcode, "systemQuantity": qty, "lastFactQuantity": qty
             })
             added += 1
 
-    # ВАЖНО: сохраняем nextId
     next_id = max([p["id"] for p in master], default=0) + 1
     await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Update master from CSV")
     await message.answer(f"✅ Мастер обновлён: добавлено {added}, обновлено {updated} товаров.")
-
     inventory = await load_inventory()
     for p in master:
         inv_item = next((i for i in inventory if i['id'] == p['id']), None)
@@ -369,11 +384,8 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
             inv_item['name'] = p['name']
         else:
             inventory.append({
-                "id": p['id'],
-                "category": p['category'],
-                "name": p['name'],
-                "systemQuantity": p['systemQuantity'],
-                "factQuantity": p.get('lastFactQuantity', p['systemQuantity'])
+                "id": p['id'], "category": p['category'], "name": p['name'],
+                "systemQuantity": p['systemQuantity'], "factQuantity": p.get('lastFactQuantity', p['systemQuantity'])
             })
     await save_inventory(inventory)
     await message.answer("Инвентаризация синхронизирована.", reply_markup=inv_menu)
@@ -449,13 +461,13 @@ async def save_to_github(message: types.Message):
 @router.message(F.text == "📎 CSV расхождений")
 async def export_mismatches_csv(message: types.Message):
     items = await load_inventory()
-    mismatches = [i for i in items if i["factQuantity"] != i["systemQuantity"]]
+    mismatches = [i for i in items if i.get("factQuantity", 0) != i.get("systemQuantity", 0)]
     if not mismatches:
         await message.answer("Расхождений нет.")
         return
     csv = "Наименование;Категория;Учёт;Факт;Разница\n"
     for i in mismatches:
-        csv += f"{i['name']};{i['category']};{i['systemQuantity']};{i['factQuantity']};{i['factQuantity']-i['systemQuantity']}\n"
+        csv += f"{i['name']};{i.get('category','')};{i['systemQuantity']};{i['factQuantity']};{i['factQuantity']-i['systemQuantity']}\n"
     await message.answer_document(
         types.BufferedInputFile(csv.encode("utf-8-sig"), "mismatches.csv"),
         caption=f"Расхождений: {len(mismatches)}"
