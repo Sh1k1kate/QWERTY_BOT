@@ -37,7 +37,7 @@ async def load_master():
 async def load_inventory():
     data = await get_file_content("inventory_data.json")
     if not data:
-        return None  # явно указываем, что файла нет / не загрузился
+        return None
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
@@ -59,16 +59,14 @@ async def load_history():
 async def save_history(history: list):
     await save_file_content("history.json", history, "Update history")
 
-# ---------- Автосинхронизация с мастером (как на сайте) ----------
+# ---------- Синхронизация инвентаризации с мастером (при первом запуске) ----------
 async def sync_inventory_from_master():
-    """Если инвентаризация пуста, создаёт её по мастер‑файлу."""
     master = await load_master()
     if not master:
         return False
     inventory = await load_inventory()
     if inventory is not None and len(inventory) > 0:
-        return False  # уже есть данные
-    # Генерируем инвентаризацию из мастера
+        return False
     new_inventory = []
     for p in master:
         new_inventory.append({
@@ -113,7 +111,6 @@ def build_items_page(items: list, page: int = 0, per_page: int = ITEMS_PER_PAGE)
 # ---------- Меню ----------
 @router.message(F.text == "📊 Инвентаризация")
 async def show_inv_menu(message: types.Message):
-    # При входе в раздел проверяем, не пуста ли инвентаризация, и при необходимости синхронизируем
     inv = await load_inventory()
     if inv is None or len(inv) == 0:
         await message.answer("⏳ Инвентаризация пуста, пробую создать из мастер‑файла...")
@@ -127,7 +124,6 @@ async def show_inv_menu(message: types.Message):
 async def show_all_items(message: types.Message, state: FSMContext):
     items = await load_inventory()
     if items is None or len(items) == 0:
-        # Перед показом пробуем синхронизировать
         if await sync_inventory_from_master():
             items = await load_inventory()
     if not items:
@@ -256,6 +252,7 @@ async def process_new_quantity(message: types.Message, state: FSMContext):
     if item:
         item["factQuantity"] = new_qty
         await save_inventory(items)
+        # История
         history = await load_history()
         history.append({
             "timestamp": int(datetime.datetime.now().timestamp() * 1000),
@@ -347,7 +344,7 @@ async def add_item_fact_qty(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(f"✅ Товар добавлен: {data['name']}", reply_markup=inv_menu)
 
-# ---------- Загрузка CSV (1С) ----------
+# ---------- Загрузка CSV (1С) с обновлением мастера ----------
 @router.message(F.text == "📁 Загрузить CSV (1С)")
 async def csv_prompt(message: types.Message, state: FSMContext):
     await message.answer("Отправьте CSV-файл (разделитель ';'), полученный из 1С.", reply_markup=ReplyKeyboardRemove())
@@ -370,6 +367,7 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
     qty_idx = next((i for i, h in enumerate(headers) if 'Количество' in h), None)
     status_idx = next((i for i, h in enumerate(headers) if 'Статус' in h), None)
     barcode_idx = next((i for i, h in enumerate(headers) if h in ('Штрихкод', 'Barcode')), None)
+
     if name_idx is None or category_idx is None or qty_idx is None:
         await message.answer("CSV должен содержать столбцы 'Наименование', 'Категория', 'Количество'.")
         return
@@ -392,23 +390,35 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
         except ValueError:
             qty = 0
         barcode = cols[barcode_idx].strip() if barcode_idx is not None and barcode_idx < len(cols) else ''
+
+        # Ищем существующий продукт
         existing = next((p for p in master if p['category'].lower() == category.lower() and p['name'].lower() == name.lower()), None)
         if existing:
+            # Обновляем системное количество, категорию, название
             existing['systemQuantity'] = qty
+            existing['category'] = category
+            existing['name'] = name
+            # Штрихкод обновляем ТОЛЬКО если в CSV он не пустой и в мастере его ещё нет
             if barcode and not existing.get('barcode'):
                 existing['barcode'] = barcode
             updated += 1
         else:
             new_id = max([p['id'] for p in master], default=0) + 1
             master.append({
-                "id": new_id, "category": category, "name": name,
-                "barcode": barcode, "systemQuantity": qty, "lastFactQuantity": qty
+                "id": new_id,
+                "category": category,
+                "name": name,
+                "barcode": barcode,   # новый товар – берём штрихкод из CSV (может быть пустым)
+                "systemQuantity": qty,
+                "lastFactQuantity": qty
             })
             added += 1
 
     next_id = max([p["id"] for p in master], default=0) + 1
     await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Update master from CSV")
     await message.answer(f"✅ Мастер обновлён: добавлено {added}, обновлено {updated} товаров.")
+
+    # Синхронизируем инвентаризацию с обновлённым мастером
     inventory = await load_inventory()
     for p in master:
         inv_item = next((i for i in inventory if i['id'] == p['id']), None)
@@ -418,11 +428,57 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
             inv_item['name'] = p['name']
         else:
             inventory.append({
-                "id": p['id'], "category": p['category'], "name": p['name'],
-                "systemQuantity": p['systemQuantity'], "factQuantity": p.get('lastFactQuantity', p['systemQuantity'])
+                "id": p['id'],
+                "category": p['category'],
+                "name": p['name'],
+                "systemQuantity": p['systemQuantity'],
+                "factQuantity": p.get('lastFactQuantity', p['systemQuantity'])
             })
     await save_inventory(inventory)
     await message.answer("Инвентаризация синхронизирована.", reply_markup=inv_menu)
+
+# ---------- Сохранение в GitHub со слиянием в мастер ----------
+@router.message(F.text == "💾 Сохранить в GitHub")
+async def save_to_github(message: types.Message):
+    items = await load_inventory()
+    if not items:
+        await message.answer("Инвентаризация пуста, нечего сохранять.")
+        return
+    try:
+        # 1. Сохраняем инвентаризацию
+        await save_inventory(items)
+
+        # 2. Загружаем мастер и сливаем фактические остатки
+        master = await load_master()
+        for inv_item in items:
+            master_item = next((p for p in master if p['id'] == inv_item['id']), None)
+            if master_item:
+                # Обновляем lastFactQuantity, не трогаем штрихкод
+                master_item['lastFactQuantity'] = inv_item['factQuantity']
+                # При необходимости можно также обновить название/категорию, если они изменились
+                # Но по логике сайта они берутся из мастера, так что не меняем.
+        # Сохраняем обновлённый мастер
+        next_id = max([p["id"] for p in master], default=0) + 1
+        await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Merge inventory into master")
+        await message.answer("✅ Инвентаризация сохранена, мастер-файл обновлён (lastFactQuantity).")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
+
+# ---------- Экспорт CSV расхождений ----------
+@router.message(F.text == "📎 CSV расхождений")
+async def export_mismatches_csv(message: types.Message):
+    items = await load_inventory()
+    mismatches = [i for i in items if i.get("factQuantity", 0) != i.get("systemQuantity", 0)]
+    if not mismatches:
+        await message.answer("Расхождений нет.")
+        return
+    csv = "Наименование;Категория;Учёт;Факт;Разница\n"
+    for i in mismatches:
+        csv += f"{i['name']};{i.get('category','')};{i['systemQuantity']};{i['factQuantity']};{i['factQuantity']-i['systemQuantity']}\n"
+    await message.answer_document(
+        types.BufferedInputFile(csv.encode("utf-8-sig"), "mismatches.csv"),
+        caption=f"Расхождений: {len(mismatches)}"
+    )
 
 # ---------- История ----------
 @router.message(F.text == "📜 История")
@@ -481,28 +537,3 @@ async def history_restore_confirm(message: types.Message, state: FSMContext):
         await message.answer("Восстановление отменено.")
     await state.clear()
     await message.answer("Меню инвентаризации:", reply_markup=inv_menu)
-
-# ---------- Сохранение / Экспорт ----------
-@router.message(F.text == "💾 Сохранить в GitHub")
-async def save_to_github(message: types.Message):
-    items = await load_inventory()
-    try:
-        await save_file_content("inventory_data.json", {"items": items}, "Save from bot")
-        await message.answer("✅ Инвентаризация сохранена в GitHub")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}")
-
-@router.message(F.text == "📎 CSV расхождений")
-async def export_mismatches_csv(message: types.Message):
-    items = await load_inventory()
-    mismatches = [i for i in items if i.get("factQuantity", 0) != i.get("systemQuantity", 0)]
-    if not mismatches:
-        await message.answer("Расхождений нет.")
-        return
-    csv = "Наименование;Категория;Учёт;Факт;Разница\n"
-    for i in mismatches:
-        csv += f"{i['name']};{i.get('category','')};{i['systemQuantity']};{i['factQuantity']};{i['factQuantity']-i['systemQuantity']}\n"
-    await message.answer_document(
-        types.BufferedInputFile(csv.encode("utf-8-sig"), "mismatches.csv"),
-        caption=f"Расхождений: {len(mismatches)}"
-    )
