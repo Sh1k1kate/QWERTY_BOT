@@ -37,7 +37,7 @@ async def load_master():
 async def load_inventory():
     data = await get_file_content("inventory_data.json")
     if not data:
-        return []
+        return None  # явно указываем, что файла нет / не загрузился
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
@@ -58,6 +58,28 @@ async def load_history():
 
 async def save_history(history: list):
     await save_file_content("history.json", history, "Update history")
+
+# ---------- Автосинхронизация с мастером (как на сайте) ----------
+async def sync_inventory_from_master():
+    """Если инвентаризация пуста, создаёт её по мастер‑файлу."""
+    master = await load_master()
+    if not master:
+        return False
+    inventory = await load_inventory()
+    if inventory is not None and len(inventory) > 0:
+        return False  # уже есть данные
+    # Генерируем инвентаризацию из мастера
+    new_inventory = []
+    for p in master:
+        new_inventory.append({
+            "id": p["id"],
+            "category": p.get("category", ""),
+            "name": p.get("name", ""),
+            "systemQuantity": p.get("systemQuantity", 0),
+            "factQuantity": p.get("lastFactQuantity", p.get("systemQuantity", 0))
+        })
+    await save_inventory(new_inventory)
+    return True
 
 def apply_stock_filter(items: list) -> list:
     if stock_filter_active:
@@ -91,11 +113,23 @@ def build_items_page(items: list, page: int = 0, per_page: int = ITEMS_PER_PAGE)
 # ---------- Меню ----------
 @router.message(F.text == "📊 Инвентаризация")
 async def show_inv_menu(message: types.Message):
+    # При входе в раздел проверяем, не пуста ли инвентаризация, и при необходимости синхронизируем
+    inv = await load_inventory()
+    if inv is None or len(inv) == 0:
+        await message.answer("⏳ Инвентаризация пуста, пробую создать из мастер‑файла...")
+        if await sync_inventory_from_master():
+            await message.answer("✅ Инвентаризация успешно создана на основе мастера.")
+        else:
+            await message.answer("❌ Не удалось создать инвентаризацию. Проверьте мастер‑файл и GitHub‑токен.")
     await message.answer("Управление инвентаризацией:", reply_markup=inv_menu)
 
 @router.message(F.text == "📋 Все товары")
 async def show_all_items(message: types.Message, state: FSMContext):
     items = await load_inventory()
+    if items is None or len(items) == 0:
+        # Перед показом пробуем синхронизировать
+        if await sync_inventory_from_master():
+            items = await load_inventory()
     if not items:
         await message.answer("📭 Инвентаризация пуста.\nЗагрузите CSV (1С) или добавьте товар вручную.", reply_markup=inv_menu)
         return
