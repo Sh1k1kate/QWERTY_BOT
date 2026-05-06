@@ -10,6 +10,7 @@ HEADERS = {
 BASE_URL = f"https://api.github.com/repos/{OWNER}/{REPO}/contents"
 
 async def get_file_content(file_path: str):
+    """Reads a JSON file from the repository."""
     url = f"{BASE_URL}/{file_path}"
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=HEADERS) as resp:
@@ -24,6 +25,7 @@ async def get_file_content(file_path: str):
                 raise Exception(f"GitHub GET error {resp.status}: {text}")
 
 async def save_file_content(file_path: str, data: dict, message: str = "Update from bot"):
+    """Saves JSON data to the repository."""
     url = f"{BASE_URL}/{file_path}"
     sha = None
     async with aiohttp.ClientSession() as session:
