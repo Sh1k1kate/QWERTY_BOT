@@ -479,7 +479,44 @@ async def export_mismatches_csv(message: types.Message):
         types.BufferedInputFile(csv.encode("utf-8-sig"), "mismatches.csv"),
         caption=f"Расхождений: {len(mismatches)}"
     )
+# ---------- Обработка штрихкодов ----------
+async def process_barcode(barcode: str, message: types.Message):
+    """Ищет товар по штрихкоду в мастер‑файле и показывает результат."""
+    master = await load_master()
+    inventory = await load_inventory()
+    product = next((p for p in master if p.get("barcode") == barcode), None)
+    if product:
+        inv_item = next((i for i in inventory if i["id"] == product["id"]), None)
+        if inv_item:
+            text = (
+                f"🔍 Товар найден:\n"
+                f"<b>{inv_item['name']}</b>\n"
+                f"Категория: {inv_item.get('category', '')}\n"
+                f"Учётный остаток: {inv_item.get('systemQuantity', 0)}\n"
+                f"Фактический: {inv_item.get('factQuantity', 0)}\n"
+                f"Штрихкод: {barcode}"
+            )
+            await message.answer(text, parse_mode="HTML")
+        else:
+            await message.answer("Товар есть в мастер‑файле, но отсутствует в инвентаризации.")
+    else:
+        await message.answer(f"Товар со штрихкодом {barcode} не найден.\nИспользуйте «➕ Добавить товар».")
 
+# Хендлер данных от Mini App
+from aiogram.types import ContentType
+
+@router.message(F.content_type == ContentType.WEB_APP_DATA)
+async def handle_web_app_data(message: types.Message, state: FSMContext):
+    barcode = message.web_app_data.data
+    await process_barcode(barcode, message)
+
+# Обновлённый текстовый хендлер (вызываем ту же функцию)
+@router.message(BarcodeSearch.waiting_for_barcode)
+async def barcode_search_execute(message: types.Message, state: FSMContext):
+    barcode = message.text.strip()
+    await process_barcode(barcode, message)
+    await state.clear()
+    await message.answer("Меню инвентаризации:", reply_markup=inv_menu)
 # ---------- История ----------
 @router.message(F.text == "📜 История")
 async def history_menu(message: types.Message, state: FSMContext):
