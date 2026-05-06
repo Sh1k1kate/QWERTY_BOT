@@ -11,14 +11,11 @@ import datetime
 router = Router()
 ITEMS_PER_PAGE = 10
 
-# Состояние для редактирования остатка
 class InventoryEdit(StatesGroup):
     waiting_for_quantity = State()
 
-# Глобальный флаг фильтра
 stock_filter_active = False
 
-# ---------- Загрузка данных ----------
 async def load_master():
     data = await get_file_content("products_master.json")
     return data.get("products", []) if data else []
@@ -37,13 +34,11 @@ async def load_history():
 async def save_history(history: list):
     await save_file_content("history.json", history, "Update history")
 
-# ---------- Фильтр ----------
 def apply_stock_filter(items: list) -> list:
     if stock_filter_active:
         return [i for i in items if i["systemQuantity"] > 0]
     return items
 
-# ---------- Построитель страниц ----------
 def build_items_page(items: list, page: int = 0, per_page: int = ITEMS_PER_PAGE):
     total = len(items)
     total_pages = math.ceil(total / per_page) if total else 1
@@ -201,7 +196,6 @@ async def process_new_quantity(message: types.Message, state: FSMContext):
     if item:
         item["factQuantity"] = new_qty
         await save_inventory(items)
-        # Запись в историю
         history = await load_history()
         history.append({
             "timestamp": int(datetime.datetime.now().timestamp() * 1000),
@@ -268,7 +262,6 @@ async def add_item_fact_qty(message: types.Message, state: FSMContext):
         await message.answer("Введите целое число.")
         return
     data = await state.get_data()
-    # Добавляем в мастер
     master = await load_master()
     new_id = max([p["id"] for p in master], default=0) + 1
     new_product = {
@@ -280,8 +273,10 @@ async def add_item_fact_qty(message: types.Message, state: FSMContext):
         "lastFactQuantity": fact
     }
     master.append(new_product)
-    await save_file_content("products_master.json", {"products": master}, "Add product from bot")
-    # Добавляем в инвентаризацию
+    # ВАЖНО: сохраняем nextId для совместимости с обновлённым сайтом
+    next_id = max([p["id"] for p in master], default=0) + 1
+    await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Add product from bot")
+
     inventory = await load_inventory()
     inventory.append({
         "id": new_id,
@@ -304,7 +299,6 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
     if not message.document.file_name.endswith('.csv'):
         await message.answer("Пожалуйста, отправьте файл с расширением .csv")
         return
-    # Используем router.bot и правильно читаем BytesIO
     file = await router.bot.get_file(message.document.file_id)
     content = await router.bot.download_file(file.file_path)
     csv_text = content.getvalue().decode('utf-8-sig')
@@ -361,10 +355,11 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
             })
             added += 1
 
-    await save_file_content("products_master.json", {"products": master}, "Update master from CSV")
+    # ВАЖНО: сохраняем nextId
+    next_id = max([p["id"] for p in master], default=0) + 1
+    await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Update master from CSV")
     await message.answer(f"✅ Мастер обновлён: добавлено {added}, обновлено {updated} товаров.")
 
-    # Синхронизация инвентаризации
     inventory = await load_inventory()
     for p in master:
         inv_item = next((i for i in inventory if i['id'] == p['id']), None)
