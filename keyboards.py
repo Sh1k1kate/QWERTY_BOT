@@ -2,9 +2,11 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    KeyboardButton
+    KeyboardButton,
+    WebAppInfo           # ← новый импорт
 )
 
+# Главное меню
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📊 Инвентаризация")],
@@ -14,6 +16,7 @@ main_menu = ReplyKeyboardMarkup(
     one_time_keyboard=True
 )
 
+# Меню техотчёта
 tech_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🗺️ Карта компьютеров")],
@@ -25,12 +28,17 @@ tech_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+# Меню инвентаризации (обновлённая кнопка)
 inv_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📋 Все товары")],
         [KeyboardButton(text="⚠️ Только расхождения")],
         [KeyboardButton(text="🔍 Поиск по названию")],
-        [KeyboardButton(text="🔍 По штрихкоду")],
+        # Новая кнопка с WebApp
+        [KeyboardButton(
+            text="📷 Сканировать штрихкод",
+            web_app=WebAppInfo(url="https://qwerty-bot-wa72.onrender.com/scanner")  # <-- замени на свой URL
+        )],
         [KeyboardButton(text="➕ Добавить товар")],
         [KeyboardButton(text="📁 Загрузить CSV (1С)")],
         [KeyboardButton(text="📜 История")],
