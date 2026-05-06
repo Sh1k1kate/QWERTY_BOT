@@ -14,7 +14,6 @@ dp = Dispatcher()
 dp.include_router(tech_router)
 dp.include_router(inv_router)
 
-# Прокидываем объект бота в роутеры
 tech_router.bot = bot
 inv_router.bot = bot
 
@@ -40,17 +39,13 @@ def create_web_app():
     return app
 
 async def main():
-    # Вот эта строка сбрасывает старые подключения
     await bot.delete_webhook(drop_pending_updates=True)
-
     polling_task = asyncio.create_task(dp.start_polling(bot))
-
     port = int(os.environ.get("PORT", 8000))
     runner = web.AppRunner(create_web_app())
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-
     print(f"Server started on port {port}")
     await polling_task
 
