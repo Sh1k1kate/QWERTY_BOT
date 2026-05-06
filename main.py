@@ -1,16 +1,27 @@
 import asyncio
 import os
 from aiohttp import web
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from config import BOT_TOKEN
+from config import BOT_TOKEN, ALLOWED_USERS
 from keyboards import main_menu
 from techreport import router as tech_router
 from inventory import router as inv_router
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+# Middleware проверки доступа
+class AccessMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event: types.Message, data: dict):
+        if event.from_user.id not in ALLOWED_USERS:
+            await event.answer("⛔ Доступ запрещён.")
+            return
+        return await handler(event, data)
+
+dp.update.outer_middleware(AccessMiddleware())
+
 dp.include_router(tech_router)
 dp.include_router(inv_router)
 
