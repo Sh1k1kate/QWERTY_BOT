@@ -12,30 +12,35 @@
 </head>
 <body>
     <video id="video" autoplay playsinline></video>
-    <div id="status">Ожидание разрешения камеры...</div>
+    <div id="status">Запуск...</div>
     <script>
         const tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand();
 
         async function startScanner() {
+            const statusEl = document.getElementById('status');
             try {
-                // 1. Запрашиваем доступ через API Telegram
-                const granted = await tg.requestCameraAccess();
-                if (!granted) {
-                    document.getElementById('status').textContent = 'Доступ к камере не предоставлен';
-                    return;
+                // 1. Запрашиваем доступ к камере через Telegram API (если доступен)
+                if (typeof tg.requestCameraAccess === 'function') {
+                    statusEl.textContent = 'Запрашиваю разрешение камеры...';
+                    const granted = await tg.requestCameraAccess();
+                    if (!granted) {
+                        statusEl.textContent = '❌ Вы отклонили доступ к камере.';
+                        return;
+                    }
+                } else {
+                    // Старые версии Telegram – пробуем сразу getUserMedia
+                    statusEl.textContent = 'Подключаю камеру (старый метод)...';
                 }
-                document.getElementById('status').textContent = 'Наведите камеру на штрихкод';
 
-                // 2. Получаем видеопоток
+                statusEl.textContent = 'Наведите камеру на штрихкод';
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
                 const video = document.getElementById('video');
                 video.srcObject = stream;
                 video.style.display = 'block';
                 await video.play();
 
-                // 3. Детектор штрихкодов
                 const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code'] });
 
                 async function scan() {
@@ -43,8 +48,7 @@
                         const barcodes = await detector.detect(video);
                         if (barcodes.length > 0) {
                             stream.getTracks().forEach(track => track.stop());
-                            const code = barcodes[0].rawValue;
-                            tg.sendData(code);
+                            tg.sendData(barcodes[0].rawValue);
                             tg.close();
                             return;
                         }
@@ -53,7 +57,9 @@
                 }
                 scan();
             } catch (err) {
-                document.getElementById('status').textContent = 'Ошибка доступа к камере. Убедитесь, что камера подключена и не используется другим приложением.';
+                statusEl.textContent = '❌ Ошибка: ' + (err.message || 'не удалось запустить камеру. Возможно, камера занята другим приложением.');
+                // Позволяем пользователю вернуться
+                setTimeout(() => tg.close(), 3000);
             }
         }
         startScanner();
