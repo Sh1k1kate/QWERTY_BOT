@@ -16,7 +16,7 @@ class InventoryEdit(StatesGroup):
 
 stock_filter_active = False
 
-# ---------- Универсальная загрузка данных ----------
+# ---------- Загрузка данных ----------
 async def load_master():
     data = await get_file_content("products_master.json")
     if not data:
@@ -59,7 +59,7 @@ async def load_history():
 async def save_history(history: list):
     await save_file_content("history.json", history, "Update history")
 
-# ---------- Синхронизация с мастером ----------
+# ---------- Синхронизация ----------
 async def sync_inventory_from_master():
     master = await load_master()
     if not master:
@@ -108,10 +108,9 @@ def build_items_page(items: list, page: int = 0, per_page: int = ITEMS_PER_PAGE)
     text += f"Страница {page+1} из {total_pages} (показано {start+1}–{min(end, total)} из {total})"
     return text, total_pages, chunk
 
-# ---------- Меню и защита от зависания ----------
+# ---------- Меню ----------
 @router.message(F.text == "📊 Инвентаризация")
 async def show_inv_menu(message: types.Message, state: FSMContext):
-    # Сбрасываем любое активное состояние, чтобы не зависнуть
     await state.clear()
     inv = await load_inventory()
     if inv is None or len(inv) == 0:
@@ -122,26 +121,6 @@ async def show_inv_menu(message: types.Message, state: FSMContext):
             await message.answer("❌ Не удалось создать инвентаризацию.")
     await message.answer("Управление инвентаризацией:", reply_markup=inv_menu)
 
-# Кнопки меню, которые должны сбрасывать состояние
-@router.message(F.text.in_(["📋 Все товары", "⚠️ Только расхождения", "🔍 Поиск по названию",
-                            "🔍 По штрихкоду", "📷 Сканировать штрихкод", "➕ Добавить товар",
-                            "📁 Загрузить CSV (1С)", "📜 История", "💾 Сохранить в GitHub",
-                            "📎 CSV расхождений"]))
-async def reset_state_on_menu(message: types.Message, state: FSMContext):
-    # Сбрасываем состояние, если оно было, чтобы меню работало всегда
-    if await state.get_state():
-        await state.clear()
-    # Далее передаём управление нужному обработчику в зависимости от текста
-    # (просто позволяем диспетчеру найти другой handler)
-    # Этот handler не должен ничего делать, кроме сброса, поэтому он вызывается первым,
-    # а затем aiogram ищет следующий обработчик.
-    # Для этого нужно зарегистрировать его с меньшим приоритетом или просто пропустить.
-    # Вместо этого мы можем не писать этот обработчик, а сброс делать в каждом нужном handler.
-    # Но лучше просто в начале каждого handler вызывать await state.clear().
-    # Так как мы уже добавили сброс в show_inv_menu и других, этот блок можно удалить.
-    pass
-
-# ---------- Все товары ----------
 @router.message(F.text == "📋 Все товары")
 async def show_all_items(message: types.Message, state: FSMContext):
     await state.clear()
@@ -215,7 +194,7 @@ async def search_execute(message: types.Message, state: FSMContext):
         kb = items_pagination_kb(0, total_pages, chunk, stock_filter_active)
         await message.answer(text, parse_mode="HTML", reply_markup=kb)
 
-# ---------- Обработка штрихкодов ----------
+# ---------- Штрихкоды ----------
 async def find_item_by_barcode(barcode: str):
     master = await load_master()
     inventory = await load_inventory()
@@ -234,10 +213,10 @@ async def start_edit_quantity(message: types.Message, state: FSMContext, item: d
         parse_mode="HTML", reply_markup=ReplyKeyboardRemove()
     )
 
-# Mini App сканирование
+# Mini App (камера)
 @router.message(F.content_type == ContentType.WEB_APP_DATA)
 async def handle_web_app_data(message: types.Message, state: FSMContext):
-    await state.clear()  # сброс перед новым действием
+    await state.clear()
     barcode = message.web_app_data.data
     product, inv_item = await find_item_by_barcode(barcode)
     if inv_item:
@@ -256,7 +235,7 @@ async def handle_web_app_data(message: types.Message, state: FSMContext):
     else:
         await message.answer(f"Товар со штрихкодом {barcode} не найден.\nИспользуйте «➕ Добавить товар».", reply_markup=inv_menu)
 
-# Текстовый ввод штрихкода
+# Текстовый штрихкод
 @router.message(F.text == "🔍 По штрихкоду")
 async def barcode_search_start(message: types.Message, state: FSMContext):
     await state.clear()
@@ -286,6 +265,16 @@ async def barcode_search_execute(message: types.Message, state: FSMContext):
         await state.clear()
 
 # ---------- Редактирование остатка ----------
+async def update_master_fact_quantity(item_id: int, new_fact: int):
+    """Обновляет lastFactQuantity в мастер‑файле и сохраняет его в GitHub."""
+    master = await load_master()
+    for p in master:
+        if p["id"] == item_id:
+            p["lastFactQuantity"] = new_fact
+            break
+    next_id = max([p["id"] for p in master], default=0) + 1
+    await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Update fact quantity from bot")
+
 @router.callback_query(F.data.startswith("edit_qty_"))
 async def edit_quantity_prompt(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -322,6 +311,9 @@ async def process_new_quantity(message: types.Message, state: FSMContext):
     if item:
         item["factQuantity"] = new_qty
         await save_inventory(items)
+        # Обновляем мастер сразу
+        await update_master_fact_quantity(item_id, new_qty)
+        # История
         history = await load_history()
         history.append({
             "timestamp": int(datetime.datetime.now().timestamp() * 1000),
@@ -349,7 +341,6 @@ async def add_item_start(message: types.Message, state: FSMContext):
     kb = [[KeyboardButton(text=c)] for c in cats]
     await message.answer("Выберите категорию:", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
 
-# ... остальные шаги добавления без изменений ...
 @router.message(InventoryAdd.category)
 async def add_item_category(message: types.Message, state: FSMContext):
     await state.update_data(category=message.text.strip())
@@ -505,7 +496,7 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
     await save_inventory(inventory)
     await message.answer("Инвентаризация синхронизирована.", reply_markup=inv_menu)
 
-# ---------- Сохранение в GitHub ----------
+# ---------- Сохранение в GitHub (полное слияние) ----------
 @router.message(F.text == "💾 Сохранить в GitHub")
 async def save_to_github(message: types.Message, state: FSMContext):
     await state.clear()
@@ -526,4 +517,78 @@ async def save_to_github(message: types.Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"❌ Ошибка сохранения: {e}\nПроверьте GitHub токен.")
 
-# ... остальные обработчики (экспорт, история) без изменений ...
+# ---------- Экспорт CSV расхождений ----------
+@router.message(F.text == "📎 CSV расхождений")
+async def export_mismatches_csv(message: types.Message, state: FSMContext):
+    await state.clear()
+    items = await load_inventory()
+    mismatches = [i for i in items if i.get("factQuantity", 0) != i.get("systemQuantity", 0)]
+    if not mismatches:
+        await message.answer("Расхождений нет.")
+        return
+    csv = "Наименование;Категория;Учёт;Факт;Разница\n"
+    for i in mismatches:
+        csv += f"{i['name']};{i.get('category','')};{i['systemQuantity']};{i['factQuantity']};{i['factQuantity']-i['systemQuantity']}\n"
+    await message.answer_document(
+        types.BufferedInputFile(csv.encode("utf-8-sig"), "mismatches.csv"),
+        caption=f"Расхождений: {len(mismatches)}"
+    )
+
+# ---------- История ----------
+@router.message(F.text == "📜 История")
+async def history_menu(message: types.Message, state: FSMContext):
+    await state.clear()
+    history = await load_history()
+    if not history:
+        await message.answer("История пуста.")
+        return
+    text = "📜 <b>История инвентаризаций</b>\n\n"
+    for i, rec in enumerate(history):
+        dt = datetime.datetime.fromtimestamp(rec['timestamp'] / 1000).strftime('%Y-%m-%d %H:%M')
+        count = len(rec['items'])
+        text += f"{i+1}. {dt} — {count} товаров\n"
+    text += "\nВведите номер для просмотра, или /cancel"
+    await state.set_state("history_choose")
+    await message.answer(text, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+
+@router.message(F.text.regexp(r'^\d+$'))
+async def history_choose(message: types.Message, state: FSMContext):
+    if await state.get_state() != "history_choose":
+        return
+    idx = int(message.text) - 1
+    history = await load_history()
+    if idx < 0 or idx >= len(history):
+        await message.answer("Неверный номер.")
+        return
+    rec = history[idx]
+    items = rec['items']
+    text = f"📜 Инвентаризация от {datetime.datetime.fromtimestamp(rec['timestamp'] / 1000).strftime('%Y-%m-%d %H:%M')}\n\n"
+    for item in items:
+        diff = item['factQuantity'] - item['systemQuantity']
+        status = "⚠️" if diff != 0 else "✅"
+        text += f"{status} {item['name']} — учёт: {item['systemQuantity']}, факт: {item['factQuantity']} ({diff:+.0f})\n"
+    text += "\nВосстановить это состояние? Напишите 'да' или 'нет'"
+    await state.update_data(history_idx=idx)
+    await state.set_state("history_restore_confirm")
+    await message.answer(text, parse_mode="HTML")
+
+@router.message(F.text.lower().in_(['да', 'нет']))
+async def history_restore_confirm(message: types.Message, state: FSMContext):
+    if await state.get_state() != "history_restore_confirm":
+        return
+    if message.text.lower() == 'да':
+        data = await state.get_data()
+        idx = data['history_idx']
+        history = await load_history()
+        rec = history[idx]
+        inventory = await load_inventory()
+        for hist_item in rec['items']:
+            inv_item = next((i for i in inventory if i['id'] == hist_item['id']), None)
+            if inv_item:
+                inv_item['factQuantity'] = hist_item['factQuantity']
+        await save_inventory(inventory)
+        await message.answer("✅ Состояние инвентаризации восстановлено.")
+    else:
+        await message.answer("Восстановление отменено.")
+    await state.clear()
+    await message.answer("Меню инвентаризации:", reply_markup=inv_menu)
