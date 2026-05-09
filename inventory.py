@@ -16,7 +16,7 @@ class InventoryEdit(StatesGroup):
 
 stock_filter_active = False
 
-# ---------- Загрузка данных ----------
+# ---------- Универсальная загрузка данных ----------
 async def load_master():
     data = await get_file_content("products_master.json")
     if not data:
@@ -35,19 +35,37 @@ async def load_master():
     return []
 
 async def load_inventory():
+    """Загружает инвентаризацию и сразу синхронизирует фактические остатки с мастером."""
     data = await get_file_content("inventory_data.json")
     if not data:
         return None
+    items = []
     if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
+        items = data
+    elif isinstance(data, dict):
         for key in ["items", "products", "data"]:
             if key in data and isinstance(data[key], list):
-                return data[key]
-        for v in data.values():
-            if isinstance(v, list):
-                return v
-    return []
+                items = data[key]
+                break
+        if not items:
+            for v in data.values():
+                if isinstance(v, list):
+                    items = v
+                    break
+
+    # Синхронизация factQuantity с lastFactQuantity из мастера
+    master = await load_master()
+    if master:
+        master_by_id = {p["id"]: p for p in master if "id" in p}
+        for item in items:
+            m = master_by_id.get(item["id"])
+            if m and "lastFactQuantity" in m:
+                # Обновляем фактический остаток, если он изменился в мастере
+                item["factQuantity"] = m["lastFactQuantity"]
+        # Сохраняем обновлённую инвентаризацию, чтобы не синхронизировать каждый раз заново
+        await save_inventory(items)
+
+    return items
 
 async def save_inventory(items: list):
     await save_file_content("inventory_data.json", {"items": items})
@@ -59,7 +77,7 @@ async def load_history():
 async def save_history(history: list):
     await save_file_content("history.json", history, "Update history")
 
-# ---------- Синхронизация ----------
+# ---------- Синхронизация при первом запуске ----------
 async def sync_inventory_from_master():
     master = await load_master()
     if not master:
@@ -311,9 +329,7 @@ async def process_new_quantity(message: types.Message, state: FSMContext):
     if item:
         item["factQuantity"] = new_qty
         await save_inventory(items)
-        # Обновляем мастер сразу
         await update_master_fact_quantity(item_id, new_qty)
-        # История
         history = await load_history()
         history.append({
             "timestamp": int(datetime.datetime.now().timestamp() * 1000),
