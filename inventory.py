@@ -261,16 +261,7 @@ async def barcode_search_execute(message: types.Message, state: FSMContext):
         await message.answer(f"Товар со штрихкодом {barcode} не найден.", reply_markup=inv_menu)
         await state.clear()
 
-# ---------- Редактирование остатка ----------
-async def update_master_fact_quantity(item_id: int, new_fact: int):
-    master = await load_master()
-    for p in master:
-        if p["id"] == item_id:
-            p["lastFactQuantity"] = new_fact
-            break
-    next_id = max([p["id"] for p in master], default=0) + 1
-    await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Update fact quantity from bot")
-
+# ---------- Редактирование остатка (только инвентаризация) ----------
 @router.callback_query(F.data.startswith("edit_qty_"))
 async def edit_quantity_prompt(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -307,17 +298,36 @@ async def process_new_quantity(message: types.Message, state: FSMContext):
     if item:
         item["factQuantity"] = new_qty
         await save_inventory(items)
-        await update_master_fact_quantity(item_id, new_qty)
+        # мастер не трогаем
         history = await load_history()
+        now = datetime.datetime.now()
+        two_hours = datetime.timedelta(hours=2)
+        if history:
+            last = history[-1]
+            last_ts = datetime.datetime.fromtimestamp(last["timestamp"] / 1000)
+            if now - last_ts < two_hours:
+                last["items"] = [{
+                    "id": it["id"],
+                    "factQuantity": it["factQuantity"],
+                    "systemQuantity": it["systemQuantity"],
+                    "name": it["name"],
+                    "category": it.get("category", "")
+                } for it in items]
+                last["timestamp"] = int(now.timestamp() * 1000)
+                await save_history(history)
+                await message.answer(f"✅ Остаток обновлён (добавлено в текущую сессию истории): {item['name']} = {new_qty}")
+                await state.clear()
+                await message.answer("Меню инвентаризации:", reply_markup=inv_menu)
+                return
         history.append({
-            "timestamp": int(datetime.datetime.now().timestamp() * 1000),
+            "timestamp": int(now.timestamp() * 1000),
             "items": [{
-                "id": item["id"],
-                "factQuantity": new_qty,
-                "systemQuantity": item["systemQuantity"],
-                "name": item["name"],
-                "category": item.get("category", "")
-            }]
+                "id": it["id"],
+                "factQuantity": it["factQuantity"],
+                "systemQuantity": it["systemQuantity"],
+                "name": it["name"],
+                "category": it.get("category", "")
+            } for it in items]
         })
         await save_history(history)
         await message.answer(f"✅ Фактический остаток обновлён: {item['name']} = {new_qty}")
@@ -466,7 +476,7 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
     await sync_inventory_from_master()
     await message.answer("Инвентаризация синхронизирована.", reply_markup=inv_menu)
 
-# ---------- Сохранение в GitHub ----------
+# ---------- Сохранение в GitHub (полный пуш) ----------
 @router.message(F.text == "💾 Сохранить в GitHub")
 async def save_to_github(message: types.Message, state: FSMContext):
     await state.clear()
@@ -475,6 +485,7 @@ async def save_to_github(message: types.Message, state: FSMContext):
         await message.answer("Инвентаризация пуста.")
         return
     try:
+        # Обновляем lastFactQuantity в мастере для всех товаров
         master = await load_master()
         for inv_item in items:
             master_item = next((p for p in master if p['id'] == inv_item['id']), None)
