@@ -3,10 +3,9 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     KeyboardButton,
-    WebAppInfo           # ← новый импорт
+    WebAppInfo
 )
 
-# Главное меню
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📊 Инвентаризация")],
@@ -16,7 +15,6 @@ main_menu = ReplyKeyboardMarkup(
     one_time_keyboard=True
 )
 
-# Меню техотчёта
 tech_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🗺️ Карта компьютеров")],
@@ -28,17 +26,18 @@ tech_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Меню инвентаризации (обновлённая кнопка)
 inv_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📋 Все товары")],
         [KeyboardButton(text="⚠️ Только расхождения")],
         [KeyboardButton(text="🔍 Поиск по названию")],
-        # Новая кнопка с WebApp
-        [KeyboardButton(
-            text="📷 Сканировать штрихкод",
-            web_app=WebAppInfo(url="https://qwerty-bot-wa72.onrender.com/scanner")  # <-- замени на свой URL
-        )],
+        [
+            KeyboardButton(
+                text="📷 Сканировать штрихкод",
+                web_app=WebAppInfo(url="https://qwerty-bot-wa72.onrender.com/scanner")
+            )
+        ],
+        [KeyboardButton(text="🔍 По штрихкоду")],
         [KeyboardButton(text="➕ Добавить товар")],
         [KeyboardButton(text="📁 Загрузить CSV (1С)")],
         [KeyboardButton(text="📄 Экспорт TXT")],
@@ -52,18 +51,15 @@ inv_menu = ReplyKeyboardMarkup(
 
 def computers_map_keyboard(computers: list, status: dict, filter_status: str = "all"):
     kb = []
-    # Строка фильтров
     filter_buttons = []
     for s, label in [("all", "Все"), ("good", "✅"), ("warning", "⚠️"), ("bad", "🔴")]:
         prefix = "✓ " if s == filter_status else ""
         filter_buttons.append(InlineKeyboardButton(text=f"{prefix}{label}", callback_data=f"map_filter_{s}"))
     kb.append(filter_buttons)
-
-    # Компьютеры
     row = []
     for comp in computers:
         icon = status.get(comp["num"], "✅")
-        comp_status = "good"  # default
+        comp_status = "good"
         if icon == "⚠️": comp_status = "warning"
         elif icon == "🔴": comp_status = "bad"
         if filter_status == "all" or comp_status == filter_status:
@@ -90,7 +86,6 @@ def items_pagination_kb(page: int, total_pages: int, items_on_page: list = None,
         nav.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"inv_page_{page+1}"))
     if nav:
         buttons.append(nav)
-    # Переключатель фильтра
     stock_text = "📦 Только с остатком: ВЫКЛ" if stock_filter else "📦 Только с остатком: ВКЛ"
     buttons.append([InlineKeyboardButton(text=stock_text, callback_data="toggle_stock_filter")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
