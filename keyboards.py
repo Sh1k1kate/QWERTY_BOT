@@ -41,6 +41,7 @@ inv_menu = ReplyKeyboardMarkup(
         )],
         [KeyboardButton(text="➕ Добавить товар")],
         [KeyboardButton(text="📁 Загрузить CSV (1С)")],
+        [KeyboardButton(text="📄 Экспорт TXT")],
         [KeyboardButton(text="📜 История")],
         [KeyboardButton(text="💾 Сохранить в GitHub")],
         [KeyboardButton(text="📎 CSV расхождений")],
