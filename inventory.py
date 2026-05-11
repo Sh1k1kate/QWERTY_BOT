@@ -35,23 +35,29 @@ async def load_master():
                 return v
     return []
 
-async def load_inventory_raw():
-    """Загружает локальную инвентаризацию (с несохранёнными правками)."""
+async def load_local_inventory():
+    """Локальная инвентаризация с накопленными правками."""
     data = await get_file_content("inventory_data.json")
     if not data:
-        return []
+        return {}
+    items_list = []
     if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
+        items_list = data
+    elif isinstance(data, dict):
         for key in ["items", "products", "data"]:
             if key in data and isinstance(data[key], list):
-                return data[key]
-        for v in data.values():
-            if isinstance(v, list):
-                return v
-    return []
+                items_list = data[key]
+                break
+        if not items_list:
+            for v in data.values():
+                if isinstance(v, list):
+                    items_list = v
+                    break
+    # Возвращаем словарь id → factQuantity для быстрого поиска
+    return {item["id"]: item.get("factQuantity", 0) for item in items_list if "id" in item}
 
-async def save_inventory(items: list):
+async def save_local_inventory_from_master(items: list):
+    """Сохраняет инвентаризацию на основе мастера (сбрасывает правки)."""
     await save_file_content("inventory_data.json", {"items": items})
 
 async def load_history():
@@ -61,23 +67,55 @@ async def load_history():
 async def save_history(history: list):
     await save_file_content("history.json", history, "Update history")
 
-# ---------- Создание инвентаризации из мастера (только при первом запуске) ----------
-async def sync_inventory_from_master():
-    """Пересоздаёт инвентаризацию из мастера (сбрасывает локальные правки)."""
+# ---------- Сборка инвентаризации из мастера + локальные правки ----------
+async def build_display_inventory():
+    """Возвращает список товаров: основа – мастер, сверху – локальные правки."""
     master = await load_master()
     if not master:
         return None
-    new_inv = []
+
+    local_facts = await load_local_inventory()   # словарь id → факт
+
+    items = []
     for p in master:
-        new_inv.append({
+        pid = p["id"]
+        # Берём факт из локальной правки, если она есть, иначе из lastFactQuantity мастера
+        local_fact = local_facts.get(pid)
+        if local_fact is not None:
+            fact = local_fact
+        else:
+            fact = p.get("lastFactQuantity", p.get("systemQuantity", 0))
+        items.append({
+            "id": pid,
+            "category": p.get("category", ""),
+            "name": p.get("name", ""),
+            "systemQuantity": p.get("systemQuantity", 0),
+            "factQuantity": fact
+        })
+
+    # Также обновим локальное хранилище до актуального состояния,
+    # чтобы при редактировании у нас была всегда свежая основа.
+    # (Сохраняем полную структуру, чтобы load_local_inventory() возвращала корректные данные)
+    await save_file_content("inventory_data.json", {"items": items})
+    return items
+
+# ---------- Синхронизация при первом запуске ----------
+async def initial_sync_from_master():
+    """Вызывается, если инвентаризация ещё не создана."""
+    master = await load_master()
+    if not master:
+        return False
+    items = []
+    for p in master:
+        items.append({
             "id": p["id"],
             "category": p.get("category", ""),
             "name": p.get("name", ""),
             "systemQuantity": p.get("systemQuantity", 0),
             "factQuantity": p.get("lastFactQuantity", p.get("systemQuantity", 0))
         })
-    await save_inventory(new_inv)
-    return new_inv
+    await save_local_inventory_from_master(items)
+    return True
 
 def apply_stock_filter(items: list) -> list:
     if stock_filter_active:
@@ -112,18 +150,19 @@ def build_items_page(items: list, page: int = 0, per_page: int = ITEMS_PER_PAGE)
 @router.message(F.text == "📊 Инвентаризация")
 async def show_inv_menu(message: types.Message, state: FSMContext):
     await state.clear()
-    items = await load_inventory_raw()
-    if not items:
+    items = await build_display_inventory()
+    if items is None:
         await message.answer("⏳ Инвентаризация не найдена, создаю из мастер-файла...")
-        items = await sync_inventory_from_master()
-        if not items:
+        if await initial_sync_from_master():
+            await message.answer("✅ Инвентаризация создана.")
+        else:
             await message.answer("❌ Не удалось загрузить мастер-файл.")
     await message.answer("Управление инвентаризацией:", reply_markup=inv_menu)
 
 @router.message(F.text == "📋 Все товары")
 async def show_all_items(message: types.Message, state: FSMContext):
     await state.clear()
-    items = await load_inventory_raw()
+    items = await build_display_inventory()
     if not items:
         await message.answer("📭 Инвентаризация пуста.", reply_markup=inv_menu)
         return
@@ -147,7 +186,7 @@ async def paginate_items(callback: types.CallbackQuery, state: FSMContext):
 async def toggle_stock_filter(callback: types.CallbackQuery, state: FSMContext):
     global stock_filter_active
     stock_filter_active = not stock_filter_active
-    items = await load_inventory_raw()
+    items = await build_display_inventory()
     filtered = apply_stock_filter(items)
     await state.update_data(inv_items=filtered, current_page=0)
     text, total_pages, chunk = build_items_page(filtered, 0)
@@ -158,7 +197,7 @@ async def toggle_stock_filter(callback: types.CallbackQuery, state: FSMContext):
 @router.message(F.text == "⚠️ Только расхождения")
 async def show_mismatches(message: types.Message, state: FSMContext):
     await state.clear()
-    items = await load_inventory_raw()
+    items = await build_display_inventory()
     if not items:
         await message.answer("Инвентаризация пуста.", reply_markup=inv_menu)
         return
@@ -181,7 +220,7 @@ async def search_start(message: types.Message, state: FSMContext):
 @router.message(InventorySearch.waiting_for_query)
 async def search_execute(message: types.Message, state: FSMContext):
     query = message.text.strip().lower()
-    items = await load_inventory_raw()
+    items = await build_display_inventory()
     if not items:
         await message.answer("Инвентаризация пуста.", reply_markup=inv_menu)
         await state.clear()
@@ -200,7 +239,7 @@ async def search_execute(message: types.Message, state: FSMContext):
 # ---------- Штрихкоды ----------
 async def find_item_by_barcode(barcode: str):
     master = await load_master()
-    inventory = await load_inventory_raw()
+    inventory = await build_display_inventory()
     product = next((p for p in master if p.get("barcode") == barcode), None)
     if product:
         inv_item = next((i for i in inventory if i["id"] == product["id"]), None)
@@ -270,7 +309,7 @@ async def barcode_search_execute(message: types.Message, state: FSMContext):
 async def edit_quantity_prompt(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     item_id = int(callback.data.split("_")[2])
-    items = await load_inventory_raw()
+    items = await build_display_inventory()
     item = next((i for i in items if i["id"] == item_id), None)
     if not item:
         await callback.answer("Товар не найден", show_alert=True)
@@ -297,12 +336,13 @@ async def process_new_quantity(message: types.Message, state: FSMContext):
         return
     data = await state.get_data()
     item_id = data["edit_item_id"]
-    items = await load_inventory_raw()
+    # Обновляем локальную копию
+    items = await build_display_inventory()  # получаем актуальный список (уже с правками)
     item = next((i for i in items if i["id"] == item_id), None)
     if item:
         item["factQuantity"] = new_qty
-        await save_inventory(items)
-        # Обновляем историю (объединение)
+        # Сохраняем локально
+        await save_file_content("inventory_data.json", {"items": items})
         await add_to_history(item_id, new_qty, item["systemQuantity"], item["name"], item.get("category", ""))
         await message.answer(f"✅ Фактический остаток обновлён: {item['name']} = {new_qty}")
     else:
@@ -310,41 +350,89 @@ async def process_new_quantity(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Меню инвентаризации:", reply_markup=inv_menu)
 
-# ---------- Функция добавления в историю с объединением ----------
+# ---------- История ----------
 TWO_HOURS_MS = 2 * 60 * 60 * 1000
 
 async def add_to_history(item_id: int, new_fact: int, sys_qty: int, name: str, category: str):
     history = await load_history()
     now = int(datetime.datetime.now().timestamp() * 1000)
-    # Проверяем последнюю запись
     if history and (now - history[-1]["timestamp"] < TWO_HOURS_MS):
         last = history[-1]
-        # Обновляем существующий или добавляем новый товар в последнюю запись
-        existing_item = next((it for it in last["items"] if it["id"] == item_id), None)
-        if existing_item:
-            existing_item["factQuantity"] = new_fact
+        existing = next((it for it in last["items"] if it["id"] == item_id), None)
+        if existing:
+            existing["factQuantity"] = new_fact
         else:
             last["items"].append({
-                "id": item_id,
-                "factQuantity": new_fact,
-                "systemQuantity": sys_qty,
-                "name": name,
-                "category": category
+                "id": item_id, "factQuantity": new_fact,
+                "systemQuantity": sys_qty, "name": name, "category": category
             })
-        last["timestamp"] = now  # обновляем временную метку
+        last["timestamp"] = now
     else:
-        # Создаём новую запись
         history.append({
             "timestamp": now,
             "items": [{
-                "id": item_id,
-                "factQuantity": new_fact,
-                "systemQuantity": sys_qty,
-                "name": name,
-                "category": category
+                "id": item_id, "factQuantity": new_fact,
+                "systemQuantity": sys_qty, "name": name, "category": category
             }]
         })
     await save_history(history)
+
+@router.message(F.text == "📜 История")
+async def history_menu(message: types.Message, state: FSMContext):
+    await state.clear()
+    history = await load_history()
+    if not history:
+        await message.answer("История пуста.")
+        return
+    text = "📜 <b>Накопленные изменения (не сохранены)</b>\n\n"
+    for i, rec in enumerate(history):
+        dt = datetime.datetime.fromtimestamp(rec['timestamp'] / 1000).strftime('%Y-%m-%d %H:%M')
+        count = len(rec['items'])
+        text += f"{i+1}. {dt} — {count} товаров\n"
+    text += "\nДля детализации введите номер записи, или /cancel"
+    await state.set_state("history_choose")
+    await message.answer(text, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+
+@router.message(F.text.regexp(r'^\d+$'))
+async def history_choose(message: types.Message, state: FSMContext):
+    if await state.get_state() != "history_choose":
+        return
+    idx = int(message.text) - 1
+    history = await load_history()
+    if idx < 0 or idx >= len(history):
+        await message.answer("Неверный номер.")
+        return
+    rec = history[idx]
+    items = rec['items']
+    text = f"📜 Изменения от {datetime.datetime.fromtimestamp(rec['timestamp'] / 1000).strftime('%Y-%m-%d %H:%M')}\n\n"
+    for item in items:
+        diff = item['factQuantity'] - item['systemQuantity']
+        status = "⚠️" if diff != 0 else "✅"
+        text += f"{status} {item['name']} — учёт: {item['systemQuantity']}, факт: {item['factQuantity']} ({diff:+.0f})\n"
+    await message.answer(text, parse_mode="HTML")
+    await message.answer("Меню инвентаризации:", reply_markup=inv_menu)
+    await state.clear()
+
+# ---------- Сохранение в GitHub (пушит накопленные изменения) ----------
+@router.message(F.text == "💾 Сохранить в GitHub")
+async def save_to_github(message: types.Message, state: FSMContext):
+    await state.clear()
+    items = await build_display_inventory()
+    if not items:
+        await message.answer("Инвентаризация пуста.")
+        return
+    try:
+        master = await load_master()
+        for inv_item in items:
+            master_item = next((p for p in master if p['id'] == inv_item['id']), None)
+            if master_item:
+                master_item['lastFactQuantity'] = inv_item['factQuantity']
+        next_id = max([p["id"] for p in master], default=0) + 1
+        await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Merge inventory into master")
+        await save_history([])   # очищаем историю
+        await message.answer("✅ Инвентаризация сохранена в GitHub, история очищена.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка сохранения: {e}\nПроверьте GitHub токен.")
 
 # ---------- Добавление товара ----------
 @router.message(F.text == "➕ Добавить товар")
@@ -398,26 +486,20 @@ async def add_item_fact_qty(message: types.Message, state: FSMContext):
     master = await load_master()
     new_id = max([p["id"] for p in master], default=0) + 1
     new_product = {
-        "id": new_id,
-        "category": data["category"],
-        "name": data["name"],
-        "barcode": data["barcode"],
-        "systemQuantity": data["system_qty"],
+        "id": new_id, "category": data["category"], "name": data["name"],
+        "barcode": data["barcode"], "systemQuantity": data["system_qty"],
         "lastFactQuantity": fact
     }
     master.append(new_product)
     next_id = max([p["id"] for p in master], default=0) + 1
     await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Add product from bot")
-    # Добавляем в локальную инвентаризацию
-    items = await load_inventory_raw()
+    # Обновляем и локальную инвентаризацию
+    items = await build_display_inventory()
     items.append({
-        "id": new_id,
-        "category": data["category"],
-        "name": data["name"],
-        "systemQuantity": data["system_qty"],
-        "factQuantity": fact
+        "id": new_id, "category": data["category"], "name": data["name"],
+        "systemQuantity": data["system_qty"], "factQuantity": fact
     })
-    await save_inventory(items)
+    await save_file_content("inventory_data.json", {"items": items})
     await state.clear()
     await message.answer(f"✅ Товар добавлен: {data['name']}", reply_markup=inv_menu)
 
@@ -480,11 +562,8 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
         else:
             new_id = max([p['id'] for p in master], default=0) + 1
             master.append({
-                "id": new_id,
-                "category": category,
-                "name": name,
-                "barcode": barcode,
-                "systemQuantity": qty,
+                "id": new_id, "category": category, "name": name,
+                "barcode": barcode, "systemQuantity": qty,
                 "lastFactQuantity": qty
             })
             added += 1
@@ -492,37 +571,22 @@ async def handle_csv_file(message: types.Message, state: FSMContext):
     next_id = max([p["id"] for p in master], default=0) + 1
     await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Update master from CSV")
     await message.answer(f"✅ Мастер обновлён: добавлено {added}, обновлено {updated} товаров.")
-    # Обновляем локальную инвентаризацию из мастера
-    await sync_inventory_from_master()
+    # Сбрасываем локальные правки, синхронизируя с мастером
+    new_items = []
+    for p in master:
+        new_items.append({
+            "id": p["id"], "category": p["category"], "name": p["name"],
+            "systemQuantity": p["systemQuantity"],
+            "factQuantity": p.get("lastFactQuantity", p["systemQuantity"])
+        })
+    await save_local_inventory_from_master(new_items)
     await message.answer("Инвентаризация синхронизирована с мастером.", reply_markup=inv_menu)
-
-# ---------- Сохранение в GitHub (пушит накопленные изменения) ----------
-@router.message(F.text == "💾 Сохранить в GitHub")
-async def save_to_github(message: types.Message, state: FSMContext):
-    await state.clear()
-    items = await load_inventory_raw()
-    if not items:
-        await message.answer("Инвентаризация пуста.")
-        return
-    try:
-        master = await load_master()
-        for inv_item in items:
-            master_item = next((p for p in master if p['id'] == inv_item['id']), None)
-            if master_item:
-                master_item['lastFactQuantity'] = inv_item['factQuantity']
-        next_id = max([p["id"] for p in master], default=0) + 1
-        await save_file_content("products_master.json", {"products": master, "nextId": next_id}, "Merge inventory into master")
-        # Очищаем историю после успешного сохранения
-        await save_history([])
-        await message.answer("✅ Инвентаризация сохранена в GitHub, история очищена.")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка сохранения: {e}\nПроверьте GitHub токен.")
 
 # ---------- Экспорт CSV расхождений ----------
 @router.message(F.text == "📎 CSV расхождений")
 async def export_mismatches_csv(message: types.Message, state: FSMContext):
     await state.clear()
-    items = await load_inventory_raw()
+    items = await build_display_inventory()
     if not items:
         await message.answer("Инвентаризация пуста.")
         return
@@ -544,10 +608,8 @@ def normalize_name(name: str) -> str:
 
 def similarity(a: str, b: str) -> float:
     an, bn = normalize_name(a), normalize_name(b)
-    if an == bn:
-        return 1.0
-    if an in bn or bn in an:
-        return 0.9
+    if an == bn: return 1.0
+    if an in bn or bn in an: return 0.9
     wa, wb = an.split(), bn.split()
     common = sum(1 for w in wa if w in wb)
     avg_len = (len(wa) + len(wb)) / 2
@@ -556,7 +618,7 @@ def similarity(a: str, b: str) -> float:
 @router.message(F.text == "📄 Экспорт TXT")
 async def export_txt_handler(message: types.Message, state: FSMContext):
     await state.clear()
-    items = await load_inventory_raw()
+    items = await build_display_inventory()
     if not items:
         await message.answer("Инвентаризация пуста.")
         return
@@ -564,7 +626,6 @@ async def export_txt_handler(message: types.Message, state: FSMContext):
     if not nonzero:
         await message.answer("Нет товаров с ненулевым фактическим остатком.")
         return
-
     groups = []
     for item in nonzero:
         found = None
@@ -577,15 +638,11 @@ async def export_txt_handler(message: types.Message, state: FSMContext):
             found["items"].append(item)
         else:
             groups.append({
-                "name": item["name"],
-                "category": item.get("category", ""),
-                "total": item["factQuantity"],
-                "items": [item]
+                "name": item["name"], "category": item.get("category", ""),
+                "total": item["factQuantity"], "items": [item]
             })
-
     cat_order = {"Напитки": 1, "Энергетические напитки": 2, "Готовая Еда": 3, "Снэки": 4, "Шоколад": 5}
     groups.sort(key=lambda g: (cat_order.get(g["category"], 99), normalize_name(g["name"])))
-
     lines = [f"{g['name']} {g['total']}" for g in groups]
     txt = "\n".join(lines) + "\n"
     if len(txt) > 4096:
@@ -595,40 +652,3 @@ async def export_txt_handler(message: types.Message, state: FSMContext):
         )
     else:
         await message.answer(f"<pre>{txt}</pre>", parse_mode="HTML")
-
-# ---------- История ----------
-@router.message(F.text == "📜 История")
-async def history_menu(message: types.Message, state: FSMContext):
-    await state.clear()
-    history = await load_history()
-    if not history:
-        await message.answer("История пуста.")
-        return
-    text = "📜 <b>История изменений (не сохранено)</b>\n\n"
-    for i, rec in enumerate(history):
-        dt = datetime.datetime.fromtimestamp(rec['timestamp'] / 1000).strftime('%Y-%m-%d %H:%M')
-        count = len(rec['items'])
-        text += f"{i+1}. {dt} — {count} товаров\n"
-    text += "\nВведите номер для просмотра, или /cancel"
-    await state.set_state("history_choose")
-    await message.answer(text, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
-
-@router.message(F.text.regexp(r'^\d+$'))
-async def history_choose(message: types.Message, state: FSMContext):
-    if await state.get_state() != "history_choose":
-        return
-    idx = int(message.text) - 1
-    history = await load_history()
-    if idx < 0 or idx >= len(history):
-        await message.answer("Неверный номер.")
-        return
-    rec = history[idx]
-    items = rec['items']
-    text = f"📜 Изменения от {datetime.datetime.fromtimestamp(rec['timestamp'] / 1000).strftime('%Y-%m-%d %H:%M')}\n\n"
-    for item in items:
-        diff = item['factQuantity'] - item['systemQuantity']
-        status = "⚠️" if diff != 0 else "✅"
-        text += f"{status} {item['name']} — учёт: {item['systemQuantity']}, факт: {item['factQuantity']} ({diff:+.0f})\n"
-    await message.answer(text, parse_mode="HTML")
-    await message.answer("Меню инвентаризации:", reply_markup=inv_menu)
-    await state.clear()
